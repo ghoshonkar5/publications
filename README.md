@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 
   # GITAM College Login Interface
 
@@ -9,3 +10,6 @@
 
   Run `npm run dev` to start the development server.
   
+=======
+# publications
+>>>>>>> 8f56a544ff5195cd7bf4a6aee33ad2002c8c4c16

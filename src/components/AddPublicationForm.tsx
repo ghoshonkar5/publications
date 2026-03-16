@@ -34,6 +34,7 @@ interface PublicationFormData {
   academicYear: string;
   doi: string;
   link: string;
+  fileUrl?: string;
   fileData?: string;
   fileName?: string;
   fileType?: string;
@@ -235,11 +236,12 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
       };
 
       // Convert file to base64 if present
+// Convert file to base64 if present
       if (selectedFile) {
         const reader = new FileReader();
         await new Promise((resolve, reject) => {
           reader.onload = () => {
-            cleanedData.fileData = reader.result as string;
+            cleanedData.fileUrl = reader.result as string;  // ✅ changed fileData → fileUrl
             cleanedData.fileName = selectedFile.name;
             cleanedData.fileType = selectedFile.type;
             resolve(null);

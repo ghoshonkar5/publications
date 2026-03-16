@@ -14,6 +14,10 @@ export interface User {
   role?: string;
   isFirstTimeLogin?: boolean;
   profileSetupComplete?: boolean;
+  // ✅ Academic profile URLs — dynamic per faculty
+  googleScholarUrl?: string | null;
+  scopusUrl?: string | null;
+  wosUrl?: string | null;
 }
 
 interface AuthContextType {
@@ -32,6 +36,8 @@ interface AuthContextType {
   }) => Promise<{ success: boolean; error?: string }>;
   logout: () => Promise<void>;
   updateProfile: (profile: Partial<User>) => Promise<{ success: boolean; error?: string }>;
+  // ✅ NEW: update just the profile URLs
+  updateProfileUrls: (urls: { googleScholarUrl?: string; scopusUrl?: string; wosUrl?: string }) => Promise<{ success: boolean; error?: string }>;
   getAccessToken: () => string | null;
 }
 
@@ -40,6 +46,25 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 interface AuthProviderProps {
   children: ReactNode;
 }
+
+// ✅ Helper: map backend user object to frontend User type
+const mapBackendUser = (backendUser: any): User => ({
+  id: backendUser.id,
+  email: backendUser.email,
+  name: backendUser.name,
+  facultyId: backendUser.facultyId,
+  department: backendUser.department,
+  designation: backendUser.designation,
+  mobile: backendUser.mobile,
+  researchArea: backendUser.researchArea,
+  role: backendUser.role,
+  isFirstTimeLogin: !backendUser.profileSetupComplete,
+  profileSetupComplete: backendUser.profileSetupComplete,
+  // ✅ Map profile URLs from backend
+  googleScholarUrl: backendUser.googleScholarUrl || null,
+  scopusUrl: backendUser.scopusUrl || null,
+  wosUrl: backendUser.wosUrl || null,
+});
 
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
@@ -54,64 +79,48 @@ export function AuthProvider({ children }: AuthProviderProps) {
     console.log('✅ Backend API running on http://localhost:5000');
   }, []);
 
-  const checkSession = async () => {
-    try {
-      // Check if we have a stored user
-      const storedUser = authAPI.getCurrentUser();
-      const token = localStorage.getItem('authToken');
-      
-      if (storedUser && token) {
-        // Verify token is still valid by fetching current user
-        try {
-          const response: any = await authAPI.getMe();
-          if (response.success && response.user) {
-            setUser(response.user);
-            console.log('✅ Session restored for user:', response.user.facultyId);
-          } else {
-            // Token invalid, clear storage
-            authAPI.logout();
-          }
-        } catch (error) {
-          // Token expired or invalid
-          console.log('⚠️ Session expired, please login again');
+const checkSession = async () => {
+  try {
+    const storedUser = authAPI.getCurrentUser();
+    const token = localStorage.getItem('authToken');
+    
+    if (storedUser && token) {
+      try {
+        const response: any = await authAPI.getMe();
+        if (response.success && response.user) {
+          setUser(mapBackendUser(response.user));
+          console.log('✅ Session restored for user:', response.user.facultyId);
+        } else {
           authAPI.logout();
+          setUser(null);
         }
+      } catch (error) {
+        console.log('⚠️ Session expired, please login again');
+        authAPI.logout();
+        setUser(null);
       }
-    } catch (error) {
-      console.error('Session check failed:', error);
-      authAPI.logout();
-    } finally {
-      setLoading(false);
     }
-  };
+  } catch (error) {
+    console.error('Session check failed:', error);
+    authAPI.logout();
+    setUser(null);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const login = async (facultyId: string, password: string) => {
     try {
       setLoading(true);
-      
       console.log('🔐 Attempting login for:', facultyId);
       
-      // Call backend login API
       const response: any = await authAPI.login(facultyId, password);
       
       if (response.success && response.user) {
         console.log('✅ Login successful for user:', response.user.facultyId);
         
-        // Map backend user to frontend User type
-        const mappedUser: User = {
-          id: response.user.id,
-          email: response.user.email,
-          name: response.user.name,
-          facultyId: response.user.facultyId,
-          department: response.user.department,
-          designation: response.user.designation,
-          mobile: response.user.mobile,
-          researchArea: response.user.researchArea,
-          role: response.user.role,
-          isFirstTimeLogin: !response.user.profileSetupComplete,
-          profileSetupComplete: response.user.profileSetupComplete
-        };
-        
+        // ✅ Use mapper — includes profile URLs automatically
+        const mappedUser = mapBackendUser(response.user);
         setUser(mappedUser);
         
         return { 
@@ -149,35 +158,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }) => {
     try {
       setLoading(true);
-      
       console.log('📝 Attempting registration for:', userData.name);
       
-      // Call backend register API
       const response: any = await authAPI.register(userData);
       
       if (response.success && response.user) {
         console.log('✅ Registration successful for:', response.user.facultyId);
-        
-        // Map backend user to frontend User type
-        const mappedUser: User = {
-          id: response.user.id,
-          email: response.user.email,
-          name: response.user.name,
-          facultyId: response.user.facultyId,
-          department: response.user.department,
-          designation: response.user.designation,
-          mobile: response.user.mobile,
-          researchArea: response.user.researchArea,
-          role: response.user.role,
-          isFirstTimeLogin: false,
-          profileSetupComplete: true
-        };
-        
+        const mappedUser = mapBackendUser(response.user);
         setUser(mappedUser);
-        
-        return { 
-          success: true
-        };
+        return { success: true };
       } else {
         return { 
           success: false, 
@@ -210,10 +199,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       if (!user) {
         return { success: false, error: 'No user logged in' };
       }
-
       console.log('📝 Updating profile...');
       
-      // For now, update locally (you can add a backend endpoint for this later)
       const updatedUser = { 
         ...user, 
         ...profile, 
@@ -222,8 +209,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
       };
       
       setUser(updatedUser);
-      
-      // Update localStorage
       localStorage.setItem('user', JSON.stringify(updatedUser));
       
       return { success: true };
@@ -233,6 +218,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
         success: false, 
         error: error.message || 'Profile update failed. Please try again.' 
       };
+    }
+  };
+
+  // ✅ NEW: update profile URLs — calls backend and updates local state
+  const updateProfileUrls = async (urls: { googleScholarUrl?: string; scopusUrl?: string; wosUrl?: string }) => {
+    try {
+      if (!user) return { success: false, error: 'No user logged in' };
+      
+      const response: any = await authAPI.updateProfileUrls(urls);
+      
+      if (response.success) {
+        const updatedUser = {
+          ...user,
+          googleScholarUrl: urls.googleScholarUrl || user.googleScholarUrl,
+          scopusUrl: urls.scopusUrl || user.scopusUrl,
+          wosUrl: urls.wosUrl || user.wosUrl,
+        };
+        setUser(updatedUser);
+        localStorage.setItem('user', JSON.stringify(updatedUser));
+        return { success: true };
+      } else {
+        return { success: false, error: response.message || 'Failed to update profile URLs' };
+      }
+    } catch (error: any) {
+      console.error('Update profile URLs error:', error);
+      return { success: false, error: error.message || 'Failed to update profile URLs' };
     }
   };
 
@@ -247,6 +258,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     signup,
     logout,
     updateProfile,
+    updateProfileUrls,
     getAccessToken
   };
 

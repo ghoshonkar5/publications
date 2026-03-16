@@ -61,7 +61,7 @@ export function FacultyDashboard({
 
   // Load faculty profile and academic data
   useEffect(() => {
-    if (user?.id && user?.accessToken) {
+    if (user?.facultyId) {
       loadFacultyData();
       loadAcademicStats();
     }
@@ -90,12 +90,12 @@ export function FacultyDashboard({
   };
 
   const loadAcademicStats = async () => {
-    if (!user?.id || !user?.accessToken) return;
+    if (!user?.facultyId) return;
     
     try {
       console.log('Loading academic statistics...');
       
-      const response = await api.getFacultyData(user.id, user.accessToken);
+      const response = await api.getFacultyData(user.facultyId, '');
       
       if (response.success && response.data) {
         setAcademicStats(response.data.academicStats);
@@ -122,13 +122,13 @@ export function FacultyDashboard({
   };
 
   const syncAllData = async () => {
-    if (!user?.id || !user?.accessToken) return;
+    if (!user?.facultyId) return;
     
     setIsLoading(true);
     try {
       console.log('Syncing all academic data from external sources...');
       
-      const response = await api.syncData(user.id, user.accessToken);
+      const response = await api.syncData(user.facultyId, '');
       
       if (response.success) {
         // Reload all data after sync

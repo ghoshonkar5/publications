@@ -21,9 +21,8 @@ app.use(cors({
     origin: '*', // Allow all origins for development
     credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // Serve uploaded files
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
@@ -56,6 +55,15 @@ app.get('/api/health', (req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
     console.error(err.stack);
+    
+    // Handle PayloadTooLarge specifically
+    if (err.type === 'entity.too.large') {
+        return res.status(413).json({
+            success: false,
+            message: 'File too large. Maximum size is 50MB.'
+        });
+    }
+    
     res.status(500).json({ 
         success: false, 
         message: 'Something went wrong!',

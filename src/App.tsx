@@ -41,10 +41,10 @@ function AppContent() {
         console.log('🔐 Admin user detected, switching to admin view');
         setIsAdminMode(true);
         setCurrentView("admin");
-      } else if (user.isFirstTimeLogin) {
-        console.log('👋 First time login, switching to profile setup');
-        setCurrentView("profile-setup");
-      } else {
+      } else if (user.isFirstTimeLogin && !user.profileSetupComplete) {
+  console.log('👋 First time login, switching to profile setup');
+  setCurrentView("profile-setup");
+} else {
         console.log('📊 Regular user, switching to dashboard');
         setCurrentView("dashboard");
       }
