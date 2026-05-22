@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -13,7 +13,7 @@ interface AddConferenceFormProps {
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (conferenceData: any) => Promise<void>;
-  initialData?: any; // ✅ Added for edit mode
+  initialData?: any;
 }
 
 interface ConferenceFormData {
@@ -40,11 +40,20 @@ interface ConferenceFormData {
   fileType?: string;
 }
 
+const deriveAcademicYear = (dateStr: string): string => {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '';
+  const month = date.getMonth() + 1; // 1-12
+  const year = date.getFullYear();
+  const startYear = month >= 6 ? year : year - 1;
+  return `${startYear}-${String(startYear + 1).slice(2)}`;
+};
+
 export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: AddConferenceFormProps) {
   const { user } = useAuth();
   const isEditMode = !!initialData;
 
-  // ✅ Pre-fill form with initialData if editing
   const getInitialFormData = (): ConferenceFormData => {
     if (initialData) {
       return {
@@ -107,21 +116,46 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
     setSelectedFile(null);
   };
 
+  // ✅ FIX: Reset when opening for add; re-populate when opening for edit
+  useEffect(() => {
+    if (isOpen) resetForm();
+  }, [isOpen, initialData]);
+
   const handleClose = () => {
     resetForm();
     onClose();
   };
 
   const handleInputChange = (field: keyof ConferenceFormData, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors(prev => ({ ...prev, [field]: '' }));
+  setFormData(prev => {
+    const updated = { ...prev, [field]: value };
+    if (field === 'conferenceDate') {
+      updated.academicYear = deriveAcademicYear(value);
     }
-  };
+    return updated;
+  });
+  if (errors[field]) {
+    setErrors(prev => ({ ...prev, [field]: '' }));
+  }
+};
 
   const addAuthor = () => setFormData(prev => ({ ...prev, authors: [...prev.authors, ''] }));
   const removeAuthor = (index: number) => setFormData(prev => ({ ...prev, authors: prev.authors.filter((_, i) => i !== index) }));
   const updateAuthor = (index: number, value: string) => setFormData(prev => ({ ...prev, authors: prev.authors.map((a, i) => i === index ? value : a) }));
+
+  const scrollToFirstError = (errorFields: Record<string, string>) => {
+    const fieldOrder = ['title', 'conferenceName', 'conferenceType', 'host', 'authors', 'conferenceDate', 'academicYear', 'doi', 'link', 'presentationLink'];
+    for (const field of fieldOrder) {
+      if (errorFields[field]) {
+        const el = document.getElementById(field === 'authors' ? 'authors-section' : field);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          (el as HTMLInputElement).focus?.();
+        }
+        break;
+      }
+    }
+  };
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -129,8 +163,6 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
     if (!formData.title.trim()) newErrors.title = 'Title is required';
     if (!formData.conferenceName.trim()) newErrors.conferenceName = 'Conference name is required';
     if (!formData.conferenceType) newErrors.conferenceType = 'Conference type is required';
-    if (!formData.venue.trim()) newErrors.venue = 'Venue is required';
-    if (!formData.country.trim()) newErrors.country = 'Country is required';
     if (!formData.host.trim()) newErrors.host = 'Host is required';
     if (!formData.conferenceDate.trim()) newErrors.conferenceDate = 'Conference date is required';
     if (!formData.academicYear.trim()) newErrors.academicYear = 'Academic year is required';
@@ -142,15 +174,20 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
     if (formData.presentationLink && !formData.presentationLink.startsWith('http')) newErrors.presentationLink = 'Please enter a valid URL';
 
     if (user?.name) {
+      const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, '').replace(/\./g, '');
       const isAuthor = validAuthors.some(a =>
-        a.toLowerCase().includes(user.name.toLowerCase()) ||
-        user.name.toLowerCase().includes(a.toLowerCase())
+        normalize(a).includes(normalize(user.name)) ||
+        normalize(user.name).includes(normalize(a))
       );
       setShowVerificationWarning(!isAuthor);
     }
 
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    if (Object.keys(newErrors).length > 0) {
+      setTimeout(() => scrollToFirstError(newErrors), 50);
+      return false;
+    }
+    return true;
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -173,6 +210,8 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
     try {
       const cleanedData: any = {
         ...formData,
+        // ✅ FIX: map conferenceType → type so backend and display code receive the right field
+        type: formData.conferenceType,
         authors: formData.authors.filter(a => a.trim() !== ''),
       };
 
@@ -180,7 +219,7 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
         const reader = new FileReader();
         await new Promise((resolve, reject) => {
           reader.onload = () => {
-            cleanedData.fileUrl = reader.result as string; // ✅ fileUrl not fileData
+            cleanedData.fileUrl = reader.result as string;
             cleanedData.fileName = selectedFile.name;
             cleanedData.fileType = selectedFile.type;
             resolve(null);
@@ -193,9 +232,9 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
       await onSubmit(cleanedData);
       setSuccess(true);
       setTimeout(() => handleClose(), 1500);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save conference:', error);
-      setErrors({ submit: `Failed to ${isEditMode ? 'update' : 'add'} conference. Please try again.` });
+      setErrors({ submit: error.message || `Failed to ${isEditMode ? 'update' : 'add'} conference. Please try again.` });
     } finally {
       setIsSubmitting(false);
     }
@@ -221,11 +260,8 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center justify-between">
+          <DialogTitle className="pr-8">
             <span className="text-teal-700">{isEditMode ? 'Edit Conference' : 'Add New Conference'}</span>
-            <Button variant="ghost" size="sm" onClick={handleClose} className="text-gray-400 hover:text-gray-600">
-              <X className="w-4 h-4" />
-            </Button>
           </DialogTitle>
         </DialogHeader>
 
@@ -269,13 +305,13 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
                 </div>
 
                 <div>
-                  <Label htmlFor="venue">Venue *</Label>
+                  <Label htmlFor="venue">Venue</Label>
                   <Input id="venue" value={formData.venue} onChange={(e) => handleInputChange('venue', e.target.value)} placeholder="Conference venue/location" className="mt-1" />
                   {errors.venue && <p className="text-red-500 text-sm mt-1">{errors.venue}</p>}
                 </div>
 
                 <div>
-                  <Label htmlFor="country">Country *</Label>
+                  <Label htmlFor="country">Country</Label>
                   <Input id="country" value={formData.country} onChange={(e) => handleInputChange('country', e.target.value)} placeholder="Country" className="mt-1" />
                   {errors.country && <p className="text-red-500 text-sm mt-1">{errors.country}</p>}
                 </div>
@@ -309,7 +345,7 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
           </div>
 
           {/* Authors */}
-          <div className="space-y-4">
+          <div id="authors-section" className="space-y-4">
             <h3 className="text-lg font-medium text-gray-900 border-b pb-2">Authors</h3>
             {formData.authors.map((author, index) => (
               <div key={index} className="flex items-center space-x-2">
@@ -354,8 +390,8 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
               </div>
               <div>
                 <Label htmlFor="academicYear">Academic Year *</Label>
-                <Input id="academicYear" value={formData.academicYear} onChange={(e) => handleInputChange('academicYear', e.target.value)} placeholder="e.g., 2023-24" className="mt-1" />
-                {errors.academicYear && <p className="text-red-500 text-sm mt-1">{errors.academicYear}</p>}
+<Input id="academicYear" value={formData.academicYear} readOnly placeholder="Auto-derived from date" className="mt-1 bg-gray-50 text-gray-500 cursor-not-allowed" />
+{formData.academicYear && <p className="text-xs text-teal-600 mt-1">Auto-filled — you can edit if needed</p>}                {errors.academicYear && <p className="text-red-500 text-sm mt-1">{errors.academicYear}</p>}
               </div>
             </div>
           </div>
@@ -443,7 +479,17 @@ export function AddConferenceForm({ isOpen, onClose, onSubmit, initialData }: Ad
             </Button>
           </div>
 
-          {errors.submit && <div className="text-red-500 text-sm text-center mt-2">{errors.submit}</div>}
+          {(errors.submit || Object.keys(errors).some(k => k !== 'submit' && errors[k])) && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 mt-2">
+              <p className="text-sm font-medium text-red-700 mb-1">Please fix the following before submitting:</p>
+              <ul className="list-disc list-inside space-y-0.5">
+                {errors.submit && <li className="text-sm text-red-600">{errors.submit}</li>}
+                {Object.entries(errors).filter(([k, v]) => k !== 'submit' && v).map(([k, v]) => (
+                  <li key={k} className="text-sm text-red-600">{v}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </form>
       </DialogContent>
     </Dialog>

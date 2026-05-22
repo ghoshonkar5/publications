@@ -1,70 +1,76 @@
-// API Configuration
+// ── API Configuration ─────────────────────────────────────────────
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
 
-// Helper function to get auth token
-const getAuthToken = (): string | null => {
-  return localStorage.getItem('authToken');
-};
+const getAuthToken = (): string | null => localStorage.getItem('authToken');
 
-// Helper function to handle API responses
+const authHeaders = () => ({
+  'Authorization': `Bearer ${getAuthToken()}`,
+});
+
+const jsonHeaders = () => ({
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${getAuthToken()}`,
+});
+
 const handleResponse = async (response: Response) => {
   const data = await response.json();
-  
   if (!response.ok) {
-    throw new Error(data.message || 'Something went wrong');
+    if (response.status === 401) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+    }
+    return { ...data, success: false, status: response.status };
   }
-  
   return data;
 };
 
-// Authentication API
+// ── Types ─────────────────────────────────────────────────────────
+export interface AcademicStats {
+  publications: { total: number; thisYear: number; journals: number };
+  conferences:  { total: number; international: number; national: number };
+  books:        { total: number; books: number; chapters: number };
+  citations:    {
+    total: number;
+    googleCitations: number;
+    scopusCitations: number;
+    wosCitations: number;
+    hIndex: number;
+    i10Index: number;
+    hIndexSource: 'google' | 'scopus' | 'none';   // ← NEW: tracks which source h-index came from
+    i10IndexSource: 'google' | 'scopus' | 'none';  // ← NEW: tracks which source i10 came from
+  };
+}
+
+// ── Auth API ──────────────────────────────────────────────────────
 export const authAPI = {
   login: async (facultyId: string, password: string) => {
     const response = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ facultyId, password }),
     });
-    
     const data = await handleResponse(response);
-    
-    // Store token
     if (data.success && data.token) {
       localStorage.setItem('authToken', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
     }
-    
     return data;
   },
 
   register: async (userData: {
-    email: string;
-    password: string;
-    facultyId: string;
-    name: string;
-    department?: string;
-    designation?: string;
-    mobile?: string;
-    researchArea?: string;
+    email: string; password: string; facultyId: string; name: string;
+    department?: string; designation?: string; mobile?: string; researchArea?: string;
   }) => {
     const response = await fetch(`${API_BASE_URL}/auth/register`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(userData),
     });
-    
     const data = await handleResponse(response);
-    
-    // Store token
     if (data.success && data.token) {
       localStorage.setItem('authToken', data.token);
       localStorage.setItem('user', JSON.stringify(data.user));
     }
-    
     return data;
   },
 
@@ -80,348 +86,325 @@ export const authAPI = {
 
   getMe: async () => {
     const token = getAuthToken();
-    
-    const response = await fetch(`${API_BASE_URL}/auth/me`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+    if (!token) return { success: false, message: 'No token found' };
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/me`, {
+        headers: authHeaders(),
+      });
+      return handleResponse(response);
+    } catch (error) {
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('user');
+      return { success: false, message: String(error) };
+    }
+  },
+
+  updateExtendedProfile: async (data: {
+    officeRoom?: string | null;
+    officeHours?: string | null;
+    coursesTaught?: string | null;
+    roles?: string | null;
+    linkedinUrl?: string | null;
+    websiteUrl?: string | null;
+    yearsOfExperience?: number | null;
+    profilePhoto?: string | null;
+    mobile?: string | null;
+    researchArea?: string | null;
+  }) => {
+    const response = await fetch(`${API_BASE_URL}/auth/profile`, {
+      method: 'PUT',
+      headers: jsonHeaders(),
+      body: JSON.stringify(data),
     });
-    
     return handleResponse(response);
   },
 
-  // ✅ NEW: Update academic profile URLs
   updateProfileUrls: async (urls: {
     googleScholarUrl?: string;
     scopusUrl?: string;
     wosUrl?: string;
   }) => {
-    const token = getAuthToken();
-    
     const response = await fetch(`${API_BASE_URL}/auth/profile-urls`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: jsonHeaders(),
       body: JSON.stringify(urls),
     });
-    
+    return handleResponse(response);
+  },
+
+  getAllFaculty: async () => {
+    const response = await fetch(`${API_BASE_URL}/auth/faculty`, {
+      headers: authHeaders(),
+    });
     return handleResponse(response);
   },
 };
 
-// Publications API
+// ── Publications API ──────────────────────────────────────────────
 export const publicationsAPI = {
   getAll: async (filters?: { academicYear?: string; quartile?: string }) => {
-    const token = getAuthToken();
     const params = new URLSearchParams(filters as any);
-    
     const response = await fetch(`${API_BASE_URL}/publications?${params}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 
   getByFaculty: async (facultyId: string) => {
-    const token = getAuthToken();
-    
     const response = await fetch(`${API_BASE_URL}/publications/faculty/${facultyId}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 
   getById: async (id: string) => {
-    const token = getAuthToken();
-    
     const response = await fetch(`${API_BASE_URL}/publications/${id}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 
-  create: async (publicationData: any) => {
-    const token = getAuthToken();
-    
+  create: async (data: any) => {
     const response = await fetch(`${API_BASE_URL}/publications`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(publicationData),
+      headers: jsonHeaders(),
+      body: JSON.stringify(data),
     });
-    
     return handleResponse(response);
   },
 
-  update: async (id: string, publicationData: any) => {
-    const token = getAuthToken();
-    
+  update: async (id: string, data: any) => {
     const response = await fetch(`${API_BASE_URL}/publications/${id}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(publicationData),
+      headers: jsonHeaders(),
+      body: JSON.stringify(data),
     });
-    
     return handleResponse(response);
   },
 
   delete: async (id: string) => {
-    const token = getAuthToken();
-    
     const response = await fetch(`${API_BASE_URL}/publications/${id}`, {
       method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 
   getStats: async (facultyId: string) => {
-    const token = getAuthToken();
-    
     const response = await fetch(`${API_BASE_URL}/publications/stats/${facultyId}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 };
 
-// Conferences API
+// ── Conferences API ───────────────────────────────────────────────
 export const conferencesAPI = {
   getAll: async (filters?: { academicYear?: string; type?: string }) => {
-    const token = getAuthToken();
     const params = new URLSearchParams(filters as any);
-    
     const response = await fetch(`${API_BASE_URL}/conferences?${params}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 
   getByFaculty: async (facultyId: string) => {
-    const token = getAuthToken();
-    
     const response = await fetch(`${API_BASE_URL}/conferences/faculty/${facultyId}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 
-  create: async (conferenceData: any) => {
-    const token = getAuthToken();
-    
+  create: async (data: any) => {
     const response = await fetch(`${API_BASE_URL}/conferences`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(conferenceData),
+      headers: jsonHeaders(),
+      body: JSON.stringify(data),
     });
-    
     return handleResponse(response);
   },
 
-  update: async (id: string, conferenceData: any) => {
-    const token = getAuthToken();
-    
+  update: async (id: string, data: any) => {
     const response = await fetch(`${API_BASE_URL}/conferences/${id}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(conferenceData),
+      headers: jsonHeaders(),
+      body: JSON.stringify(data),
     });
-    
     return handleResponse(response);
   },
 
   delete: async (id: string) => {
-    const token = getAuthToken();
-    
     const response = await fetch(`${API_BASE_URL}/conferences/${id}`, {
       method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 };
 
-// Books API
+// ── Books API ─────────────────────────────────────────────────────
 export const booksAPI = {
   getAll: async (filters?: { academicYear?: string; type?: string }) => {
-    const token = getAuthToken();
     const params = new URLSearchParams(filters as any);
-    
     const response = await fetch(`${API_BASE_URL}/books?${params}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 
   getByFaculty: async (facultyId: string) => {
-    const token = getAuthToken();
-    
     const response = await fetch(`${API_BASE_URL}/books/faculty/${facultyId}`, {
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 
-  create: async (bookData: any) => {
-    const token = getAuthToken();
-    
+  create: async (data: any) => {
     const response = await fetch(`${API_BASE_URL}/books`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(bookData),
+      headers: jsonHeaders(),
+      body: JSON.stringify(data),
     });
-    
     return handleResponse(response);
   },
 
-  update: async (id: string, bookData: any) => {
-    const token = getAuthToken();
-    
+  update: async (id: string, data: any) => {
     const response = await fetch(`${API_BASE_URL}/books/${id}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify(bookData),
+      headers: jsonHeaders(),
+      body: JSON.stringify(data),
     });
-    
     return handleResponse(response);
   },
 
   delete: async (id: string) => {
-    const token = getAuthToken();
-    
     const response = await fetch(`${API_BASE_URL}/books/${id}`, {
       method: 'DELETE',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-      },
+      headers: authHeaders(),
     });
-    
     return handleResponse(response);
   },
 };
 
-// Legacy API methods for compatibility with existing components
-const getFacultyData = async (userId: string, token: string) => {
+// ── getFacultyData: aggregates stats from all three tables ────────
+const getFacultyData = async (facultyId: string, _token: string) => {
   try {
-    const userStr = localStorage.getItem('user');
-    const user = userStr ? JSON.parse(userStr) : null;
-    const facultyId = user?.facultyId;
+    if (!facultyId) throw new Error('Faculty ID not found');
 
-    if (!facultyId) {
-      throw new Error('Faculty ID not found');
-    }
+    const token = getAuthToken();
 
-    const [pubs, confs, books] = await Promise.all([
+    // ── FIX: Fetch publications, conferences, books, Scholar metrics,
+    //         AND Scopus metrics all in parallel.
+    //         Scopus metrics come from /api/scopus/metrics (author-level,
+    //         same endpoint ScopusMetricsWidget uses) — NOT per-paper sums.
+    const [pubs, confs, books, scholarRes, scopusRes] = await Promise.all([
       publicationsAPI.getByFaculty(facultyId),
       conferencesAPI.getByFaculty(facultyId),
       booksAPI.getByFaculty(facultyId),
+      fetch(`${API_BASE_URL}/scholar/metrics/${facultyId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.json()).catch(() => ({ success: false })),
+      // ← NEW: fetch the same author-level Scopus metrics the widget uses
+      fetch(`${API_BASE_URL}/scopus/metrics/${facultyId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).then(r => r.json()).catch(() => ({ success: false })),
     ]);
 
-    const publications = pubs.data || [];
-    const conferences = confs.data || [];
-    const booksData = books.data || [];
+    const publications: any[] = pubs.data  || [];
+    const conferences:  any[] = confs.data || [];
+    const booksData:    any[] = books.data || [];
 
-    const totalCitations = publications.reduce((sum: number, pub: any) => {
-      return sum + (pub.wosCitations || 0) + (pub.scopusCitations || 0) + (pub.googleCitations || 0);
-    }, 0);
+    // ── Google Scholar metrics (from SerpAPI, saved to faculty table) ──
+    const scholarMetrics  = scholarRes?.success ? scholarRes.metrics : null;
+    const googleCitations = scholarMetrics?.citations?.all ??
+      publications.reduce((s: number, p: any) => s + (p.googleCitations || 0), 0);
 
+    // ── FIX: Scopus citation count — use author-level count from faculty table
+    //         (scopus_citation_count = 24), NOT per-paper sum (was wrongly 5).
+    //         Falls back to per-paper sum only if the endpoint fails entirely.
+    const scopusCitations: number = scopusRes?.success
+      ? (scopusRes.citationCount ?? 0)                          // ← author-level "24"
+      : publications.reduce(
+          (s: number, p: any) => s + (p.scopusCitations || 0), 0  // fallback
+        );
+
+    // ── WoS: still per-paper (no author-level WoS endpoint yet) ──
+    const wosCitations = publications.reduce(
+      (s: number, p: any) => s + (p.wosCitations || 0), 0
+    );
+
+    // ── H-Index: prefer Google Scholar (all-time), fall back to Scopus ──
+    const hIndexSource: 'google' | 'scopus' | 'none' =
+      scholarMetrics?.hIndex?.all != null ? 'google'
+      : scopusRes?.success && (scopusRes.hIndex ?? 0) > 0 ? 'scopus'
+      : 'none';
+
+    const hIndex: number =
+      hIndexSource === 'google'  ? (scholarMetrics!.hIndex.all ?? 0)
+      : hIndexSource === 'scopus' ? (scopusRes.hIndex ?? 0)
+      : 0;
+
+    // ── i10-Index: Google Scholar only (Scopus doesn't provide i10) ──
+    const i10IndexSource: 'google' | 'scopus' | 'none' =
+      scholarMetrics?.i10Index?.all != null ? 'google' : 'none';
+
+    const i10Index: number = scholarMetrics?.i10Index?.all ?? 0;
+
+    const totalCitations = googleCitations + scopusCitations + wosCitations;
+
+    // "This year" pubs
     const currentYear = new Date().getFullYear();
     const thisYearPubs = publications.filter((p: any) => {
-      const year = p.monthYear ? parseInt(p.monthYear.split('-')[1] || p.monthYear.split('/')[1]) : 0;
-      return year === currentYear;
+      if (!p.monthYear) return false;
+      const parts = p.monthYear.trim().split(' ');
+      return parseInt(parts[parts.length - 1]) === currentYear;
     });
 
-    return {
-      success: true,
-      data: {
-        academicStats: {
-          publications: {
-            total: publications.length,
-            thisYear: thisYearPubs.length,
-            journals: publications.length,
-          },
-          conferences: {
-            total: conferences.length,
-            international: conferences.filter((c: any) => c.type === 'International').length,
-            national: conferences.filter((c: any) => c.type === 'National').length,
-          },
-          books: {
-            total: booksData.length,
-            books: booksData.filter((b: any) => b.type === 'Book').length,
-            chapters: booksData.filter((b: any) => b.type === 'Book Chapter').length,
-          },
-          citations: {
-            total: totalCitations,
-            hIndex: 0,
-            i10Index: 0,
-          },
-        },
+    const stats: AcademicStats = {
+      publications: {
+        total:    publications.length,
+        thisYear: thisYearPubs.length,
+        journals: publications.length,
+      },
+      conferences: {
+        total:         conferences.length,
+        international: conferences.filter((c: any) => c.type === 'International').length,
+        national:      conferences.filter((c: any) => c.type === 'National').length,
+      },
+      books: {
+        total:    booksData.length,
+        books:    booksData.filter((b: any) => b.type === 'Book').length,
+        chapters: booksData.filter((b: any) => b.type === 'Book Chapter').length,
+      },
+      citations: {
+        total: totalCitations,
+        googleCitations,
+        scopusCitations,   // ← now correct author-level count
+        wosCitations,
+        hIndex,
+        i10Index,
+        hIndexSource,      // ← new: 'google' | 'scopus' | 'none'
+        i10IndexSource,    // ← new: 'google' | 'none'
       },
     };
+
+    return { success: true, data: { academicStats: stats } };
   } catch (error) {
-    console.error('getFacultyData error:', error);
+    console.error('[getFacultyData] error:', error);
     return { success: false, error: String(error) };
   }
 };
 
-const syncData = async (userId: string, token: string) => {
+const syncData = async (_userId: string, _token: string) => {
   return { success: true, message: 'Sync completed successfully' };
 };
 
-// Default export for convenience
+// ── Main export ───────────────────────────────────────────────────
 export const api = {
-  auth: authAPI,
+  auth:         authAPI,
   publications: publicationsAPI,
-  conferences: conferencesAPI,
-  books: booksAPI,
+  conferences:  conferencesAPI,
+  books:        booksAPI,
   getFacultyData,
   syncData,
 };

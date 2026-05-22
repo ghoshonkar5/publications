@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -13,19 +14,23 @@ interface LoginFormProps {
 
 export function LoginForm({ onSwitchToSignUp }: LoginFormProps) {
   const { login } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [formData, setFormData] = useState({
     facultyId: '',
     password: '',
     userType: 'faculty'
   });
-  const [currentTab, setCurrentTab] = useState('faculty');
+  const [currentTab, setCurrentTab] = useState(() => searchParams.get('tab') === 'admin' ? 'admin' : 'faculty');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showForgotModal, setShowForgotModal] = useState(false);
+  const [forgotId, setForgotId] = useState('');
+  const [forgotSubmitted, setForgotSubmitted] = useState(false);
 
   const handleTabChange = (value: string) => {
     setCurrentTab(value);
-    // Clear form data and errors when switching tabs
+    setSearchParams(value === 'admin' ? { tab: 'admin' } : {}, { replace: true });
     setFormData({
       facultyId: '',
       password: '',
@@ -185,9 +190,9 @@ export function LoginForm({ onSwitchToSignUp }: LoginFormProps) {
                 )}
               </Button>
               <div className="text-center space-y-2">
-                <a href="#" className="text-sm text-teal-600 hover:text-teal-700 hover:underline transition-colors block">
+                <button type="button" onClick={() => { setForgotId(formData.facultyId); setForgotSubmitted(false); setShowForgotModal(true); }} className="text-sm text-teal-600 hover:text-teal-700 hover:underline transition-colors block w-full">
                   Forgot your password?
-                </a>
+                </button>
               </div>
             </form>
           </TabsContent>
@@ -256,9 +261,9 @@ export function LoginForm({ onSwitchToSignUp }: LoginFormProps) {
                 )}
               </Button>
               <div className="text-center">
-                <a href="#" className="text-sm text-teal-600 hover:text-teal-700 hover:underline transition-colors">
+                <button type="button" onClick={() => { setForgotId(formData.facultyId); setForgotSubmitted(false); setShowForgotModal(true); }} className="text-sm text-teal-600 hover:text-teal-700 hover:underline transition-colors">
                   Forgot your password?
-                </a>
+                </button>
               </div>
             </form>
           </TabsContent>
@@ -282,6 +287,55 @@ export function LoginForm({ onSwitchToSignUp }: LoginFormProps) {
 
 
       </CardContent>
+      {/* Forgot Password Modal */}
+      {showForgotModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowForgotModal(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm p-6" onClick={e => e.stopPropagation()}>
+            {!forgotSubmitted ? (
+              <>
+                <h3 className="text-lg font-semibold text-gray-900 mb-1">Reset Password</h3>
+                <p className="text-sm text-gray-500 mb-4">Enter your Faculty ID and we'll send a reset request to IT support.</p>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Faculty ID</label>
+                <input
+                  type="text"
+                  value={forgotId}
+                  onChange={e => setForgotId(e.target.value.replace(/[^0-9a-zA-Z]/g, ''))}
+                  placeholder="Enter your Faculty ID"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-teal-500 mb-4"
+                />
+                <div className="flex gap-3">
+                  <button onClick={() => setShowForgotModal(false)} className="flex-1 border border-gray-300 rounded-lg py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors">
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => { if (forgotId.trim()) setForgotSubmitted(true); }}
+                    disabled={!forgotId.trim()}
+                    className="flex-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-lg py-2 text-sm transition-colors"
+                  >
+                    Submit
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-center py-2">
+                  <div className="w-12 h-12 rounded-full bg-teal-100 flex items-center justify-center mx-auto mb-3">
+                    <svg className="w-6 h-6 text-teal-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">Request Received</h3>
+                  <p className="text-sm text-gray-600 mb-1">Please contact IT Support to reset your password:</p>
+                  <p className="text-sm font-medium text-teal-700 mb-1">support@gitam.edu</p>
+                  <p className="text-sm text-gray-500 mb-1">Phone: +91-863-2344700</p>
+                  <p className="text-xs text-gray-400 mt-3">Mention your Faculty ID: <span className="font-medium text-gray-600">{forgotId}</span></p>
+                </div>
+                <button onClick={() => setShowForgotModal(false)} className="w-full mt-4 bg-teal-600 hover:bg-teal-700 text-white rounded-lg py-2 text-sm transition-colors">
+                  Close
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

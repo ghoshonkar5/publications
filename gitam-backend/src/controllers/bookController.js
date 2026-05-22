@@ -56,10 +56,20 @@ exports.createBook = async (req, res) => {
         const facultyResult = await pool.query('SELECT id FROM faculty WHERE user_id = $1', [req.user.userId]);
         if (facultyResult.rows.length === 0) return res.status(404).json({ success: false, message: 'Faculty profile not found' });
 
+        const facultyDbId = facultyResult.rows[0].id;
+
+        const titleCheck = await pool.query(
+            'SELECT id FROM books_chapters WHERE faculty_id = $1 AND LOWER(title) = LOWER($2)',
+            [facultyDbId, title]
+        );
+        if (titleCheck.rows.length > 0) {
+            return res.status(409).json({ success: false, message: 'A book/chapter with this title already exists in your portfolio.' });
+        }
+
         const result = await pool.query(
             `INSERT INTO books_chapters (faculty_id, title, author_name, department_affiliation, isbn_issn, publisher, month_year, academic_year, type, link, file_url, file_name, file_type)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-            [facultyResult.rows[0].id, title, authorName, departmentAffiliation, isbnIssn, publisher, monthYear, academicYear, type, link, fileUrl, fileName, fileType]
+            [facultyDbId, title, authorName, departmentAffiliation, isbnIssn, publisher, monthYear, academicYear, type, link, fileUrl, fileName, fileType]
         );
         res.status(201).json({ success: true, message: 'Book/Chapter created successfully', data: result.rows[0] });
     } catch (error) {
@@ -76,27 +86,46 @@ exports.updateBook = async (req, res) => {
         let paramCount = 1;
 
         const fieldMap = {
-            title: 'title', authorName: 'author_name', departmentAffiliation: 'department_affiliation',
-            isbnIssn: 'isbn_issn', publisher: 'publisher', monthYear: 'month_year',
-            academicYear: 'academic_year', type: 'type', link: 'link',
-            fileUrl: 'file_url', fileName: 'file_name', fileType: 'file_type',
+            title: 'title',
+            authorName: 'author_name',
+            departmentAffiliation: 'department_affiliation',
+            subject: 'department_affiliation',
+            isbnIssn: 'isbn_issn',
+            isbn: 'isbn_issn',
+            publisher: 'publisher',
+            monthYear: 'month_year',
+            publicationDate: 'month_year',
+            academicYear: 'academic_year',
+            type: 'type',
+            link: 'link',
+            fileUrl: 'file_url',
+            fileName: 'file_name',
+            fileType: 'file_type',
             lastEditedBy: 'last_edited_by',
-            lastEditedAt: 'last_edited_at',
         };
 
+        // ✅ Deduplicate — skip if DB column already added
+        const addedColumns = new Set();
+
         for (const [key, dbColumn] of Object.entries(fieldMap)) {
-            if (updateFields[key] !== undefined) {
+            if (updateFields[key] !== undefined && !addedColumns.has(dbColumn)) {
                 fields.push(`${dbColumn} = $${paramCount}`);
                 values.push(updateFields[key]);
                 paramCount++;
+                addedColumns.add(dbColumn);
             }
         }
 
         if (fields.length === 0) return res.status(400).json({ success: false, message: 'No fields to update' });
-        fields.push(`updated_at = CURRENT_TIMESTAMP`);
+
+        fields.push(`updated_at = NOW() AT TIME ZONE 'UTC'`);
+        fields.push(`last_edited_at = NOW() AT TIME ZONE 'UTC'`);
         values.push(id);
 
-        const result = await pool.query(`UPDATE books_chapters SET ${fields.join(', ')} WHERE id = $${paramCount} RETURNING *`, values);
+        const result = await pool.query(
+            `UPDATE books_chapters SET ${fields.join(', ')} WHERE id = $${paramCount} RETURNING *`,
+            values
+        );
         if (result.rows.length === 0) return res.status(404).json({ success: false, message: 'Book/Chapter not found' });
         res.json({ success: true, message: 'Book/Chapter updated successfully', data: result.rows[0] });
     } catch (error) {
@@ -113,5 +142,56 @@ exports.deleteBook = async (req, res) => {
     } catch (error) {
         console.error('Delete book error:', error);
         res.status(500).json({ success: false, message: 'Error deleting book', error: error.message });
+    }
+};
+
+exports.exportBooksCSV = async (req, res) => {
+    try {
+        const { facultyId, fromYear, toYear, type, columns } = req.query;
+        const selectedColumns = columns ? columns.split(',') : null;
+
+let query = `SELECT b.*, f.name as faculty_name FROM books_chapters b JOIN faculty f ON b.faculty_id = f.id WHERE 1=1`;
+const params = [];
+let paramCount = 1;
+
+if (facultyId) {
+query += ` AND f.faculty_id = $${paramCount}`;    params.push(facultyId);
+    paramCount++;
+}
+
+        if (fromYear) { query += ` AND EXTRACT(YEAR FROM TO_DATE(b.month_year, 'Mon YYYY')) >= $${paramCount}`; params.push(fromYear); paramCount++; }
+        if (toYear)   { query += ` AND EXTRACT(YEAR FROM TO_DATE(b.month_year, 'Mon YYYY')) <= $${paramCount}`; params.push(toYear); paramCount++; }
+        if (type)     { query += ` AND b.type = $${paramCount}`; params.push(type); paramCount++; }
+        query += ` ORDER BY b.created_at DESC`;
+
+        const result = await pool.query(query, params);
+
+        const ALL_COLUMNS = [
+            { key: 'title',                header: 'Title',                   get: r => r.title || '' },
+            { key: 'authorName',           header: 'Author Name',             get: r => r.author_name || '' },
+            { key: 'departmentAffiliation',header: 'Department Affiliation',  get: r => r.department_affiliation || '' },
+            { key: 'isbnIssn',             header: 'ISBN/ISSN',               get: r => r.isbn_issn || '' },
+            { key: 'publisher',            header: 'Publisher',               get: r => r.publisher || '' },
+            { key: 'monthYear',            header: 'Month & Year',            get: r => r.month_year || '' },
+            { key: 'academicYear',         header: 'Academic Year',           get: r => r.academic_year || '' },
+            { key: 'type',                 header: 'Type',                    get: r => r.type || '' },
+            { key: 'link',                 header: 'Link',                    get: r => r.link || '' },
+        ];
+
+        const cols = selectedColumns
+            ? ALL_COLUMNS.filter(c => selectedColumns.includes(c.key))
+            : ALL_COLUMNS;
+
+        const escape = val => `"${String(val).replace(/"/g, '""')}"`;
+        const header = cols.map(c => escape(c.header)).join(',');
+        const rows = result.rows.map(r => cols.map(c => escape(c.get(r))).join(','));
+        const csv = [header, ...rows].join('\n');
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="books_${facultyId}_${new Date().toISOString().split('T')[0]}.csv"`);
+        res.send(csv);
+    } catch (error) {
+        console.error('Export books CSV error:', error);
+        res.status(500).json({ success: false, message: 'Error exporting books', error: error.message });
     }
 };

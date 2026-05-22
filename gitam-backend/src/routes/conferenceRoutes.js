@@ -1,4 +1,3 @@
-
 const express = require('express');
 const router = express.Router();
 const {
@@ -6,12 +5,14 @@ const {
     getConferencesByFaculty,
     createConference,
     updateConference,
-    deleteConference
+    deleteConference,
+    exportConferencesCSV
 } = require('../controllers/conferenceController');
 const { protect } = require('../middleware/authMiddleware');
 
 router.use(protect);
 
+router.get('/export/csv', exportConferencesCSV);
 router.get('/', getAllConferences);
 router.get('/faculty/:facultyId', getConferencesByFaculty);
 router.post('/', createConference);

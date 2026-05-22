@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -13,7 +13,7 @@ interface AddBookFormProps {
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (bookData: any) => Promise<void>;
-  initialData?: any; // ✅ Added for edit mode
+  initialData?: any;
 }
 
 interface BookFormData {
@@ -45,11 +45,35 @@ interface BookFormData {
   fileType?: string;
 }
 
+const deriveAcademicYear = (dateStr: string): string => {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return '';
+  const month = date.getMonth() + 1;
+  const year = date.getFullYear();
+  const startYear = month >= 6 ? year : year - 1;
+  return `${startYear}-${String(startYear + 1).slice(2)}`;
+};
+
 export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookFormProps) {
   const { user } = useAuth();
   const isEditMode = !!initialData;
 
-  // ✅ Pre-fill form with initialData if editing
+  // Convert "Month YYYY" text (e.g. "December 2024") to "YYYY-MM-DD" for date input
+  const monthYearToDateInput = (value: string): string => {
+    if (!value) return '';
+    // Already in YYYY-MM-DD format
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+    // Try parsing "Month YYYY" e.g. "December 2024"
+    const parsed = new Date(value);
+    if (!isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      return `${y}-${m}-01`;
+    }
+    return '';
+  };
+
   const getInitialFormData = (): BookFormData => {
     if (initialData) {
       return {
@@ -61,7 +85,7 @@ export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookF
         publisher: initialData.publisher || '',
         isbn: initialData.isbnIssn || initialData.isbn || '',
         doi: initialData.doi || '',
-        publicationDate: initialData.publicationDate || initialData.monthYear || '',
+        publicationDate: monthYearToDateInput(initialData.publicationDate || initialData.monthYear || ''),
         academicYear: initialData.academicYear || '',
         pages: initialData.pages || '',
         chapterTitle: initialData.chapterTitle || '',
@@ -123,15 +147,26 @@ export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookF
     setSelectedFile(null);
   };
 
+  // ✅ FIX: Reset when opening for add; re-populate when opening for edit
+  useEffect(() => {
+    if (isOpen) resetForm();
+  }, [isOpen, initialData]);
+
   const handleClose = () => {
     resetForm();
     onClose();
   };
 
   const handleInputChange = (field: keyof BookFormData, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-    if (errors[field]) setErrors(prev => ({ ...prev, [field]: '' }));
-  };
+  setFormData(prev => {
+    const updated = { ...prev, [field]: value };
+    if (field === 'publicationDate') {
+      updated.academicYear = deriveAcademicYear(value);
+    }
+    return updated;
+  });
+  if (errors[field]) setErrors(prev => ({ ...prev, [field]: '' }));
+};
 
   const addAuthor = () => setFormData(prev => ({ ...prev, authors: [...prev.authors, ''] }));
   const removeAuthor = (index: number) => setFormData(prev => ({ ...prev, authors: prev.authors.filter((_, i) => i !== index) }));
@@ -140,6 +175,20 @@ export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookF
   const addEditor = () => setFormData(prev => ({ ...prev, editors: [...prev.editors, ''] }));
   const removeEditor = (index: number) => setFormData(prev => ({ ...prev, editors: prev.editors.filter((_, i) => i !== index) }));
   const updateEditor = (index: number, value: string) => setFormData(prev => ({ ...prev, editors: prev.editors.map((e, i) => i === index ? value : e) }));
+
+  const scrollToFirstError = (errorFields: Record<string, string>) => {
+    const fieldOrder = ['type', 'title', 'authors', 'publisher', 'isbn', 'doi', 'publicationDate', 'academicYear', 'link'];
+    for (const field of fieldOrder) {
+      if (errorFields[field]) {
+        const el = document.getElementById(field === 'authors' ? 'authors-section' : field);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          (el as HTMLInputElement).focus?.();
+        }
+        break;
+      }
+    }
+  };
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -156,16 +205,13 @@ export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookF
     if (formData.doi && !formData.doi.includes('/')) newErrors.doi = 'Please enter a valid DOI';
     if (formData.link && !formData.link.startsWith('http')) newErrors.link = 'Please enter a valid URL';
 
-    if (user?.name) {
-      const isAuthor = validAuthors.some(a =>
-        a.toLowerCase().includes(user.name.toLowerCase()) ||
-        user.name.toLowerCase().includes(a.toLowerCase())
-      );
-      setShowVerificationWarning(!isAuthor);
-    }
-
+    setShowVerificationWarning(false);
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    if (Object.keys(newErrors).length > 0) {
+      setTimeout(() => scrollToFirstError(newErrors), 50);
+      return false;
+    }
+    return true;
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -196,7 +242,7 @@ export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookF
         const reader = new FileReader();
         await new Promise((resolve, reject) => {
           reader.onload = () => {
-            cleanedData.fileUrl = reader.result as string; // ✅ fileUrl not fileData
+            cleanedData.fileUrl = reader.result as string;
             cleanedData.fileName = selectedFile.name;
             cleanedData.fileType = selectedFile.type;
             resolve(null);
@@ -209,9 +255,9 @@ export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookF
       await onSubmit(cleanedData);
       setSuccess(true);
       setTimeout(() => handleClose(), 1500);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save book:', error);
-      setErrors({ submit: `Failed to ${isEditMode ? 'update' : 'add'} book. Please try again.` });
+      setErrors({ submit: error.message || `Failed to ${isEditMode ? 'update' : 'add'} book. Please try again.` });
     } finally {
       setIsSubmitting(false);
     }
@@ -237,23 +283,12 @@ export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookF
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center justify-between">
+          <DialogTitle className="pr-8">
             <span className="text-teal-700">{isEditMode ? 'Edit Book / Book Chapter' : 'Add New Book / Book Chapter'}</span>
-            <Button variant="ghost" size="sm" onClick={handleClose} className="text-gray-400 hover:text-gray-600">
-              <X className="w-4 h-4" />
-            </Button>
           </DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {showVerificationWarning && (
-            <Alert className="bg-yellow-50 border-yellow-200">
-              <AlertTriangle className="h-4 w-4 text-yellow-600" />
-              <AlertDescription className="text-yellow-800">
-                <strong>Warning:</strong> Your name ({user?.name}) does not appear in the authors list.
-              </AlertDescription>
-            </Alert>
-          )}
 
           {/* Basic Information */}
           <div className="space-y-4">
@@ -303,7 +338,7 @@ export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookF
           </div>
 
           {/* Authors */}
-          <div className="space-y-4">
+          <div id="authors-section" className="space-y-4">
             <h3 className="text-lg font-medium text-gray-900 border-b pb-2">Authors</h3>
             {formData.authors.map((author, index) => (
               <div key={index} className="flex items-center space-x-2">
@@ -380,8 +415,8 @@ export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookF
               </div>
               <div>
                 <Label htmlFor="academicYear">Academic Year *</Label>
-                <Input id="academicYear" value={formData.academicYear} onChange={(e) => handleInputChange('academicYear', e.target.value)} placeholder="e.g., 2023-24" className="mt-1" />
-                {errors.academicYear && <p className="text-red-500 text-sm mt-1">{errors.academicYear}</p>}
+<Input id="academicYear" value={formData.academicYear} readOnly placeholder="Auto-derived from date" className="mt-1 bg-gray-50 text-gray-500 cursor-not-allowed" />
+{formData.academicYear && <p className="text-xs text-teal-600 mt-1">Auto-filled — you can edit if needed</p>}                {errors.academicYear && <p className="text-red-500 text-sm mt-1">{errors.academicYear}</p>}
               </div>
               <div>
                 <Label htmlFor="pages">Total Pages</Label>
@@ -492,7 +527,17 @@ export function AddBookForm({ isOpen, onClose, onSubmit, initialData }: AddBookF
             </Button>
           </div>
 
-          {errors.submit && <div className="text-red-500 text-sm text-center mt-2">{errors.submit}</div>}
+          {(errors.submit || Object.keys(errors).some(k => k !== 'submit' && errors[k])) && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 mt-2">
+              <p className="text-sm font-medium text-red-700 mb-1">Please fix the following before submitting:</p>
+              <ul className="list-disc list-inside space-y-0.5">
+                {errors.submit && <li className="text-sm text-red-600">{errors.submit}</li>}
+                {Object.entries(errors).filter(([k, v]) => k !== 'submit' && v).map(([k, v]) => (
+                  <li key={k} className="text-sm text-red-600">{v}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </form>
       </DialogContent>
     </Dialog>

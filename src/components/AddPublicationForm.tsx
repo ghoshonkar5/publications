@@ -13,7 +13,7 @@ interface AddPublicationFormProps {
   isOpen: boolean;
   onClose: () => void;
   onSubmit: (publicationData: any) => Promise<void>;
-  initialData?: any; // Optional initial data for editing
+  initialData?: any;
 }
 
 interface PublicationFormData {
@@ -35,10 +35,18 @@ interface PublicationFormData {
   doi: string;
   link: string;
   fileUrl?: string;
-  fileData?: string;
   fileName?: string;
   fileType?: string;
 }
+
+const deriveAcademicYear = (monthYear: string): string => {
+  const parts = monthYear.trim().split(' ');
+  const year = parseInt(parts[parts.length - 1]);
+  if (isNaN(year)) return '';
+  const month = parts[0]?.toLowerCase();
+const earlyMonths = ['january', 'february', 'march', 'april', 'may'];  const startYear = earlyMonths.includes(month) ? year - 1 : year;
+  return `${startYear}-${String(startYear + 1).slice(2)}`;
+};
 
 export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: AddPublicationFormProps) {
   const { user } = useAuth();
@@ -63,10 +71,7 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
         monthYear: initialData.monthYear || '',
         academicYear: initialData.academicYear || '',
         doi: initialData.doi || '',
-        link: initialData.link || '',
-        fileData: initialData.fileData,
-        fileName: initialData.fileName,
-        fileType: initialData.fileType
+        link: initialData.link || ''
       };
     }
     return {
@@ -91,7 +96,6 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
   };
 
   const [formData, setFormData] = useState<PublicationFormData>(getInitialFormData());
-
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [success, setSuccess] = useState(false);
@@ -99,25 +103,7 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
   const [showVerificationWarning, setShowVerificationWarning] = useState(false);
 
   const resetForm = () => {
-    setFormData({
-      title: '',
-      journal: '',
-      quartile: '',
-      impactFactor: '',
-      citeScore: '',
-      authors: [''],
-      indexing: '',
-      areaOfPaper: '',
-      positionOfAuthor: '',
-      volume: '',
-      issue: '',
-      startPage: '',
-      lastPage: '',
-      monthYear: '',
-      academicYear: '',
-      doi: '',
-      link: ''
-    });
+    setFormData(getInitialFormData());
     setErrors({});
     setSuccess(false);
     setSelectedFile(null);
@@ -128,19 +114,18 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
     onClose();
   };
 
-  const handleInputChange = (field: keyof PublicationFormData, value: string) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
-    // Clear error for this field when user starts typing
-    if (errors[field]) {
-      setErrors(prev => ({
-        ...prev,
-        [field]: ''
-      }));
+ const handleInputChange = (field: keyof PublicationFormData, value: string) => {
+  setFormData(prev => {
+    const updated = { ...prev, [field]: value };
+    if (field === 'monthYear') {
+      updated.academicYear = deriveAcademicYear(value);
     }
-  };
+    return updated;
+  });
+  if (errors[field]) {
+    setErrors(prev => ({ ...prev, [field]: '' }));
+  }
+};
 
   const addAuthor = () => {
     setFormData(prev => ({
@@ -168,34 +153,26 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
 
     if (!formData.title.trim()) newErrors.title = 'Title is required';
     if (!formData.journal.trim()) newErrors.journal = 'Journal is required';
-    if (!formData.quartile) newErrors.quartile = 'Quartile is required';
     if (!formData.monthYear.trim()) newErrors.monthYear = 'Date is required';
-    if (!formData.academicYear.trim()) newErrors.academicYear = 'Academic Year is required';
-    if (!formData.doi.trim()) newErrors.doi = 'DOI is required';
     if (!formData.link.trim()) newErrors.link = 'Publication Link is required';
     
-    // Check if at least one author is provided
     const validAuthors = formData.authors.filter(author => author.trim() !== '');
     if (validAuthors.length === 0) {
       newErrors.authors = 'At least one author is required';
     }
 
-    // Validate DOI format if provided
-    if (formData.doi && !formData.doi.includes('/')) {
-      newErrors.doi = 'Please enter a valid DOI (e.g., 10.1234/example)';
-    }
+  
 
-    // Validate URL format if provided
     if (formData.link && !formData.link.startsWith('http')) {
       newErrors.link = 'Please enter a valid URL starting with http:// or https://';
     }
 
-    // Check if faculty is in authors list
     if (user?.name) {
       const facultyName = user.name;
-      const isAuthor = validAuthors.some(author => 
-        author.toLowerCase().includes(facultyName.toLowerCase()) ||
-        facultyName.toLowerCase().includes(author.toLowerCase())
+      const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, '').replace(/\./g, '');
+      const isAuthor = validAuthors.some(author =>
+        normalize(author).includes(normalize(facultyName)) ||
+        normalize(facultyName).includes(normalize(author))
       );
       
       if (!isAuthor) {
@@ -212,7 +189,6 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      // Check file size (limit to 10MB)
       if (file.size > 10 * 1024 * 1024) {
         setErrors({ ...errors, file: 'File size must be less than 10MB' });
         return;
@@ -222,6 +198,13 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
     }
   };
 
+  const generateApaFormat = (data: PublicationFormData): string => {
+    const validAuthors = data.authors.filter(a => a.trim() !== '');
+    const authorsStr = validAuthors.join(', ');
+    const year = data.monthYear.split(' ')[1] || new Date().getFullYear();
+    return `${authorsStr} (${year}). ${data.title}. ${data.journal}, ${data.volume}(${data.issue}), ${data.startPage}-${data.lastPage}.`;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -229,21 +212,45 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
 
     setIsSubmitting(true);
     try {
-      // Clean up authors array
-      const cleanedData = {
-        ...formData,
-        authors: formData.authors.filter(author => author.trim() !== ''),
+      // ✅ Prepare data with ALL required backend fields
+      const validAuthors = formData.authors.filter(author => author.trim() !== '');
+      
+      const publicationData: any = {
+        title: formData.title,
+        journal: formData.journal,
+        quartile: formData.quartile,
+        impactFactor: formData.impactFactor || null,
+        citeScore: formData.citeScore || null,
+        wosCitations: 0,  // ✅ Added - defaults to 0
+        scopusCitations: 0,  // ✅ Added - defaults to 0
+        googleCitations: 0,  // ✅ Added - defaults to 0
+        authors: validAuthors,  // ✅ Array of author names
+        indexing: formData.indexing || null,
+        areaOfPaper: formData.areaOfPaper || null,
+        apaFormat: generateApaFormat(formData),  // ✅ Added - auto-generated
+        positionOfAuthor: formData.positionOfAuthor || null,
+        volume: formData.volume || null,
+        issue: formData.issue || null,
+        startPage: formData.startPage || null,
+        lastPage: formData.lastPage || null,
+        monthYear: formData.monthYear,
+        academicYear: formData.academicYear,
+        listOfPaperFromJournal: '',  // ✅ Added - empty string
+        doi: formData.doi,
+        link: formData.link,
+        fileUrl: null,  // ✅ Will be set below if file exists
+        fileName: null,
+        fileType: null
       };
 
-      // Convert file to base64 if present
-// Convert file to base64 if present
+      // ✅ Convert file to base64 if present
       if (selectedFile) {
         const reader = new FileReader();
         await new Promise((resolve, reject) => {
           reader.onload = () => {
-            cleanedData.fileUrl = reader.result as string;  // ✅ changed fileData → fileUrl
-            cleanedData.fileName = selectedFile.name;
-            cleanedData.fileType = selectedFile.type;
+            publicationData.fileUrl = reader.result as string;
+            publicationData.fileName = selectedFile.name;
+            publicationData.fileType = selectedFile.type;
             resolve(null);
           };
           reader.onerror = reject;
@@ -251,16 +258,17 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
         });
       }
 
-      await onSubmit(cleanedData);
+      console.log('📤 Sending publication data:', publicationData);
+
+      await onSubmit(publicationData);
       setSuccess(true);
       
-      // Close modal after success
       setTimeout(() => {
         handleClose();
       }, 1500);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to add publication:', error);
-      setErrors({ submit: 'Failed to add publication. Please try again.' });
+      setErrors({ submit: error.message || 'Failed to add publication. Please try again.' });
     } finally {
       setIsSubmitting(false);
     }
@@ -284,28 +292,17 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center justify-between">
-            <span className="text-teal-700">Add New Publication</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleClose}
-              className="text-gray-400 hover:text-gray-600"
-            >
-              <X className="w-4 h-4" />
-            </Button>
+          <DialogTitle className="pr-8">
+            <span className="text-teal-700">{isEditMode ? 'Edit Publication' : 'Add New Publication'}</span>
           </DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Verification Warning */}
           {showVerificationWarning && (
             <Alert className="bg-yellow-50 border-yellow-200">
               <AlertTriangle className="h-4 w-4 text-yellow-600" />
               <AlertDescription className="text-yellow-800">
-                <strong>Warning:</strong> Your name ({user?.name}) does not appear in the authors list. 
-                Please verify that this publication was authored by you. If you are a co-author, 
-                ensure your name is included in the authors list.
+                <strong>Warning:</strong> Your name ({user?.name}) does not appear in the authors list.
               </AlertDescription>
             </Alert>
           )}
@@ -341,7 +338,7 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
               </div>
 
               <div>
-                <Label htmlFor="quartile">Quartile *</Label>
+                <Label htmlFor="quartile">Quartile</Label>
                 <Select value={formData.quartile} onValueChange={(value) => handleInputChange('quartile', value)}>
                   <SelectTrigger className="mt-1">
                     <SelectValue placeholder="Select quartile" />
@@ -459,7 +456,6 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
                     <SelectItem value="Position 3">Position 3</SelectItem>
                     <SelectItem value="Position 4">Position 4</SelectItem>
                     <SelectItem value="Position 5">Position 5</SelectItem>
-                    <SelectItem value="Position 6">Position 6</SelectItem>
                     <SelectItem value="Other">Other</SelectItem>
                   </SelectContent>
                 </Select>
@@ -500,16 +496,18 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
               </div>
 
               <div>
-                <Label htmlFor="academicYear">Academic Year *</Label>
-                <Input
-                  id="academicYear"
-                  value={formData.academicYear}
-                  onChange={(e) => handleInputChange('academicYear', e.target.value)}
-                  placeholder="e.g., 2023-24"
-                  className="mt-1"
-                />
-                {errors.academicYear && <p className="text-red-500 text-sm mt-1">{errors.academicYear}</p>}
-              </div>
+  <Label htmlFor="academicYear">Academic Year</Label>
+  <Input
+    id="academicYear"
+    value={formData.academicYear}
+    readOnly
+    placeholder="Auto-derived from Date"
+    className="mt-1 bg-gray-50 text-gray-500 cursor-not-allowed"
+  />
+  {formData.academicYear && (
+  <p className="text-xs text-teal-600 mt-1">Auto-filled — you can edit if needed</p>
+)}
+</div>
 
               <div>
                 <Label htmlFor="indexing">Indexing</Label>
@@ -545,7 +543,7 @@ export function AddPublicationForm({ isOpen, onClose, onSubmit, initialData }: A
             
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="doi">DOI *</Label>
+                <Label htmlFor="doi">DOI</Label>
                 <Input
                   id="doi"
                   value={formData.doi}

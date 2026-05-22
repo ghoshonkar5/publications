@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -9,10 +10,13 @@ import { Dialog, DialogContent } from "./ui/dialog";
 import { AddPublicationForm } from "./AddPublicationForm";
 import { AddConferenceForm } from "./AddConferenceForm";
 import { AddBookForm } from "./AddBookForm";
+import { FlagModal } from "./FlagModal";
+import { FlagReviewModal } from "./FlagReviewModal";
 import {
-  BookOpen, Users, Book, LogOut, Settings, BarChart3,
+  BookOpen, Users, Book, LogOut, BarChart3,
   Search, ChevronDown, ChevronUp, ExternalLink, Database,
-  FileText, Download, Menu, X, Pencil, Trash2, CheckCircle, AlertTriangle
+  FileText, Download, Pencil, Trash2, CheckCircle, AlertTriangle,
+  FileDown, X, Flag
 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
@@ -24,46 +28,95 @@ interface AdminDashboardProps {
   onLogout: () => void;
 }
 
-// ✅ Subtle "last edited" badge
-function getTimeAgo(date: Date): string {
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+// ── Column definitions ────────────────────────────────────────────────────────
 
-  if (seconds < 3600) {
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 1) return 'just now';
-    return `${minutes}m ago`;
-  }
+const PUB_EXPORT_COLUMNS = [
+  { key: 'title', label: 'Title' },
+  { key: 'journal', label: 'Journal' },
+  { key: 'quartile', label: 'Quartile' },
+  { key: 'impactFactor', label: 'Impact Factor' },
+  { key: 'sjrScore', label: 'SJR Score' },
+  { key: 'citeScore', label: 'Cite Score' },
 
-  if (seconds < 86400) {
-    const hours = Math.floor(seconds / 3600);
-    return `${hours}h ago`;
-  }
+  { key: 'wosCitations', label: 'WoS Citations' },
+  { key: 'scopusCitations', label: 'Scopus Citations' },
+  { key: 'googleCitations', label: 'Google Citations' },
+  { key: 'authors', label: 'Authors' },
+  { key: 'indexing', label: 'Indexing' },
+  { key: 'source', label: 'Source' },
+  { key: 'areaOfPaper', label: 'Area of Paper' },
+  { key: 'positionOfAuthor', label: 'Author Position' },
+  { key: 'volume', label: 'Volume' },
+  { key: 'issue', label: 'Issue' },
+  { key: 'startPage', label: 'Start Page' },
+  { key: 'lastPage', label: 'Last Page' },
+  { key: 'monthYear', label: 'Month Year' },
+  { key: 'academicYear', label: 'Academic Year' },
+  { key: 'doi', label: 'DOI' },
+  { key: 'link', label: 'Link' },
+  { key: 'apaFormat', label: 'APA Format' },
+  { key: 'facultyName', label: 'Faculty Name' },
+];
 
-  const now = new Date();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (
-    date.getDate() === yesterday.getDate() &&
-    date.getMonth() === yesterday.getMonth() &&
-    date.getFullYear() === yesterday.getFullYear()
-  ) {
-    return `yesterday at ${date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true })}`;
-  }
+const CONF_EXPORT_COLUMNS = [
+  { key: 'title', label: 'Title' },
+  { key: 'conferenceName', label: 'Conference Name' },
+  { key: 'date', label: 'Date' },
+  { key: 'authors', label: 'Authors' },
+  { key: 'type', label: 'Type' },
+  { key: 'academicYear', label: 'Academic Year' },
+  { key: 'host', label: 'Host' },
+  { key: 'doi', label: 'DOI' },
+  { key: 'indexing', label: 'Indexing' },
+  { key: 'link', label: 'Link' },
+  { key: 'facultyName', label: 'Faculty Name' },
+];
 
-  return date.toLocaleString('en-US', {
-    day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', hour12: true
-  });
-}
+const BOOK_EXPORT_COLUMNS = [
+  { key: 'title', label: 'Title' },
+  { key: 'authorName', label: 'Author Name' },
+  { key: 'departmentAffiliation', label: 'Department' },
+  { key: 'isbnIssn', label: 'ISBN/ISSN' },
+  { key: 'publisher', label: 'Publisher' },
+  { key: 'monthYear', label: 'Month Year' },
+  { key: 'academicYear', label: 'Academic Year' },
+  { key: 'type', label: 'Type' },
+  { key: 'link', label: 'Link' },
+  { key: 'facultyName', label: 'Faculty Name' },
+];
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function EditedBadge({ by, at }: { by?: string | null; at?: string | null }) {
   if (!by || !at) return null;
-  const date = new Date(at);
+  const normalized = at.includes('T') ? at : at.replace(' ', 'T');
+  const utc = normalized.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(normalized) ? normalized : normalized + 'Z';
+  const date = new Date(utc);
+  const formatted = date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
   return (
-    <div className="flex items-center gap-1 mt-0.5" title={`Edited on ${date.toLocaleString()}`}>
+    <div className="flex items-center gap-1 mt-0.5">
       <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-      <span className="text-[10px] text-gray-400">Edited by {by} · {getTimeAgo(date)}</span>
+      <span className="text-[10px] text-gray-400">Edited by {by} · {formatted}</span>
     </div>
+  );
+}
+
+// ── Blinking dot ──────────────────────────────────────────────────────────────
+
+function BlinkingDot({ color }: { color: 'red' | 'amber' }) {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: '8px',
+        height: '8px',
+        borderRadius: '50%',
+        backgroundColor: color === 'red' ? '#ef4444' : '#f59e0b',
+        marginRight: '6px',
+        flexShrink: 0,
+        animation: 'pulse 1s infinite',
+      }}
+    />
   );
 }
 
@@ -107,9 +160,773 @@ function SuccessModal({ open, message, onClose }: { open: boolean; message: stri
   );
 }
 
+// ── Reusable column picker ────────────────────────────────────────────────────
+
+function ColumnPicker({
+  columns, selected, onToggle, onSelectAll, onClearAll,
+}: {
+  columns: { key: string; label: string }[];
+  selected: string[];
+  onToggle: (key: string) => void;
+  onSelectAll: () => void;
+  onClearAll: () => void;
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-sm font-medium text-gray-700">Select Columns</p>
+        <div className="flex gap-2">
+          <button onClick={onSelectAll} className="text-xs text-teal-600 hover:underline">Select All</button>
+          <span className="text-gray-300">|</span>
+          <button onClick={onClearAll} className="text-xs text-red-500 hover:underline">Clear All</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 border border-gray-100 rounded-xl p-3 bg-gray-50">
+        {columns.map(col => (
+          <label key={col.key} className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={selected.includes(col.key)}
+              onChange={() => onToggle(col.key)}
+              className="w-3.5 h-3.5 accent-teal-600"
+            />
+            <span className={`text-xs ${selected.includes(col.key) ? 'text-gray-800' : 'text-gray-400'}`}>
+              {col.label}
+            </span>
+          </label>
+        ))}
+      </div>
+      <p className="text-xs text-gray-400 mt-1">{selected.length} of {columns.length} columns selected</p>
+    </div>
+  );
+}
+
+// ── Year range picker ─────────────────────────────────────────────────────────
+
+function YearRangePicker({
+  fromYear, toYear, onFromYear, onToYear, years,
+}: {
+  fromYear: string; toYear: string;
+  onFromYear: (v: string) => void; onToYear: (v: string) => void;
+  years: string[];
+}) {
+  return (
+    <div className="mb-5">
+      <p className="text-sm font-medium text-gray-700 mb-2">Year Range (Academic Year Start)</p>
+      <div className="flex items-center gap-3">
+        <div className="flex-1">
+          <label className="text-xs text-gray-500 mb-1 block">From Year</label>
+          <select value={fromYear} onChange={e => onFromYear(e.target.value)}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+            <option value="">All Years</option>
+            {years.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+        <span className="text-gray-400 mt-5">—</span>
+        <div className="flex-1">
+          <label className="text-xs text-gray-500 mb-1 block">To Year</label>
+          <select value={toYear} onChange={e => onToYear(e.target.value)}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+            <option value="">All Years</option>
+            {years.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Faculty picker ────────────────────────────────────────────────────────────
+
+function FacultyPicker({ selected, onChange }: { selected: string[]; onChange: (v: string[]) => void }) {
+  const [facultyList, setFacultyList] = useState<{ facultyId: string; name: string }[]>([]);
+  const [isOpen, setIsOpen] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem('authToken') || '';
+    const base = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    fetch(`${base}/auth/faculty-list`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.json())
+      .then(json => {
+        if (json.success && json.data) {
+          setFacultyList(json.data.map((f: any) => ({ facultyId: f.faculty_id || f.facultyId, name: f.name })));
+        }
+      })
+      .catch(() => {
+        // Fallback: derive from publications
+        fetch(`${base}/publications`, { headers: { Authorization: `Bearer ${token}` } })
+          .then(r => r.json())
+          .then(json => {
+            const rows = json.data || [];
+            const seen = new Map<string, string>();
+            rows.forEach((p: any) => {
+              if (p.facultyName && p.facultyCode && !seen.has(p.facultyCode)) {
+                seen.set(p.facultyCode, p.facultyName);
+              }
+            });
+            setFacultyList(Array.from(seen.entries()).map(([facultyId, name]) => ({ facultyId, name })));
+          });
+      });
+  }, []);
+
+  const toggleFaculty = (facultyId: string) => {
+    onChange(
+      selected.includes(facultyId)
+        ? selected.filter(x => x !== facultyId)
+        : [...selected, facultyId]
+    );
+  };
+
+  const selectAll = () => onChange(facultyList.map(f => f.facultyId));
+  const clearAll = () => onChange([]);
+
+  return (
+    <div className="mb-5">
+      <p className="text-sm font-medium text-gray-700 mb-2">Filter by Faculty</p>
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <div
+          className="flex items-center justify-between px-3 py-2 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors"
+          onClick={() => setIsOpen(!isOpen)}
+        >
+          <span className="text-sm text-gray-700">
+            {selected.length === 0
+              ? 'All Faculty'
+              : selected.length === 1
+              ? facultyList.find(f => f.facultyId === selected[0])?.name || selected[0]
+              : `${selected.length} faculty selected`}
+          </span>
+          <div className="flex items-center gap-2">
+            {selected.length > 0 && (
+              <button
+                onClick={e => { e.stopPropagation(); clearAll(); }}
+                className="text-xs text-red-500 hover:text-red-700"
+              >Clear</button>
+            )}
+            <span className="text-gray-400 text-xs">{isOpen ? '▲' : '▼'}</span>
+          </div>
+        </div>
+        {isOpen && (
+          <div className="border-t border-gray-200 max-h-48 overflow-y-auto">
+            <div className="flex gap-2 px-3 py-2 border-b border-gray-100 bg-white sticky top-0">
+              <button onClick={selectAll} className="text-xs text-teal-600 hover:underline">Select All</button>
+              <span className="text-gray-300">|</span>
+              <button onClick={clearAll} className="text-xs text-red-500 hover:underline">Clear All</button>
+            </div>
+            {facultyList.length === 0 ? (
+              <p className="text-xs text-gray-400 px-3 py-2">Loading faculty list...</p>
+            ) : (
+              facultyList.map(f => (
+                <label key={f.facultyId} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(f.facultyId)}
+                    onChange={() => toggleFaculty(f.facultyId)}
+                    className="w-3.5 h-3.5 accent-teal-600"
+                  />
+                  <span className="text-sm text-gray-700">{f.name}</span>
+                  <span className="text-xs text-gray-400 ml-auto">{f.facultyId}</span>
+                </label>
+              ))
+            )}
+          </div>
+        )}
+      </div>
+      {selected.length > 0 && (
+        <p className="text-xs text-teal-600 mt-1">{selected.length} of {facultyList.length} faculty selected</p>
+      )}
+      {selected.length === 0 && (
+        <p className="text-xs text-gray-400 mt-1">No filter — all faculty included</p>
+      )}
+    </div>
+  );
+}
+
+// ── Per-section export modals ─────────────────────────────────────────────────
+
+function ExportPubModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: currentYear - 1989 }, (_, i) => String(currentYear - i));
+  const academicYearOptions = Array.from({ length: currentYear - 1989 }, (_, i) => {
+    const start = currentYear - i;
+    return { value: `${start}-${String(start + 1).slice(2)}`, label: `${start}-${String(start + 1).slice(2)}` };
+  });
+
+  const [filterMode, setFilterMode] = useState<'range' | 'academic'>('range');
+  const [fromYear, setFromYear] = useState('');
+  const [toYear, setToYear] = useState('');
+  const [selectedAcademicYear, setSelectedAcademicYear] = useState('');
+  const [facultyIds, setFacultyIds] = useState<string[]>([]);
+  const [selectedIndexing, setSelectedIndexing] = useState<string[]>([]);
+  const [selectedSources, setSelectedSources] = useState<string[]>([]);
+  const [selectedQuartiles, setSelectedQuartiles] = useState<string[]>([]);
+  const [selectedColumns, setSelectedColumns] = useState<string[]>(PUB_EXPORT_COLUMNS.map(c => c.key));
+  const [isExporting, setIsExporting] = useState(false);
+
+  const toggleIndexing = (v: string) =>
+    setSelectedIndexing(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
+  const toggleSource = (v: string) =>
+    setSelectedSources(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
+  const toggleQuartile = (v: string) =>
+    setSelectedQuartiles(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
+  const toggleCol = (k: string) =>
+    setSelectedColumns(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
+
+  const handleExport = async () => {
+    if (selectedColumns.length === 0) { alert('Please select at least one column.'); return; }
+    setIsExporting(true);
+    try {
+      const token = localStorage.getItem('authToken') || '';
+      const base = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+      // Export per-faculty or single export
+      const targets = facultyIds.length > 0 ? facultyIds : [null];
+      for (const fid of targets) {
+        const params = new URLSearchParams();
+        if (fid) params.set('facultyId', fid);
+        if (filterMode === 'range') {
+          if (fromYear) params.set('fromYear', fromYear);
+          if (toYear) params.set('toYear', toYear);
+        } else if (selectedAcademicYear) {
+          params.set('fromYear', selectedAcademicYear.split('-')[0]);
+          params.set('toYear', selectedAcademicYear.split('-')[0]);
+        }
+        if (selectedIndexing.length > 0) params.set('indexing', selectedIndexing.join(','));
+        if (selectedSources.length > 0) params.set('source', selectedSources.join(','));
+        if (selectedQuartiles.length > 0) params.set('quartile', selectedQuartiles.join(','));
+        params.set('columns', selectedColumns.join(','));
+        const response = await fetch(`${base}/publications/export/csv?${params}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!response.ok) throw new Error('Export failed');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `publications_${fid || 'all'}_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+      onClose();
+    } catch { alert('Failed to export. Please try again.'); }
+    finally { setIsExporting(false); }
+  };
+
+  if (!isOpen) return null;
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+        <div className="p-2">
+          <div className="flex items-center gap-2 mb-5">
+            <FileDown className="w-5 h-5 text-teal-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Export Publications to CSV</h2>
+          </div>
+
+          <FacultyPicker selected={facultyIds} onChange={setFacultyIds} />
+
+          {/* Year Filter */}
+          <div className="mb-4">
+            <p className="text-sm font-medium text-gray-700 mb-2">Filter by Year</p>
+            <div className="flex gap-2 mb-3">
+              <button onClick={() => { setFilterMode('range'); setSelectedAcademicYear(''); }}
+                className={`px-4 py-1.5 rounded-full text-xs font-medium border transition-colors ${filterMode === 'range' ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'}`}>
+                Year Range
+              </button>
+              <button onClick={() => { setFilterMode('academic'); setFromYear(''); setToYear(''); }}
+                className={`px-4 py-1.5 rounded-full text-xs font-medium border transition-colors ${filterMode === 'academic' ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'}`}>
+                Academic Year
+              </button>
+            </div>
+            {filterMode === 'range' ? (
+              <div className="flex items-center gap-3">
+                <div className="flex-1">
+                  <label className="text-xs text-gray-500 mb-1 block">From Year</label>
+                  <select value={fromYear} onChange={e => setFromYear(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+                    <option value="">All Years</option>
+                    {years.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+                <span className="text-gray-400 mt-5">—</span>
+                <div className="flex-1">
+                  <label className="text-xs text-gray-500 mb-1 block">To Year</label>
+                  <select value={toYear} onChange={e => setToYear(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+                    <option value="">All Years</option>
+                    {years.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <label className="text-xs text-gray-500 mb-1 block">Select Academic Year</label>
+                <select value={selectedAcademicYear} onChange={e => setSelectedAcademicYear(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+                  <option value="">All Academic Years</option>
+                  {academicYearOptions.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* Quartile Filter */}
+          <div className="mb-5">
+            <p className="text-sm font-medium text-gray-700 mb-2">Filter by Quartile</p>
+            <div className="flex flex-wrap gap-2">
+              {['Q1', 'Q2', 'Q3', 'Q4'].map(q => {
+                const activeColors: Record<string, string> = { Q1: '#16a34a', Q2: '#2563eb', Q3: '#f97316', Q4: '#ef4444' };
+                const isActive = selectedQuartiles.includes(q);
+                return (
+                  <button key={q} onClick={() => toggleQuartile(q)}
+                    className="px-3 py-1.5 rounded-full text-xs font-medium border transition-colors"
+                    style={isActive ? { backgroundColor: activeColors[q], color: 'white', borderColor: activeColors[q] } : { backgroundColor: 'white', color: '#4b5563', borderColor: '#d1d5db' }}>
+                    {q}
+                  </button>
+                );
+              })}
+            </div>
+            {selectedQuartiles.length === 0 && <p className="text-xs text-gray-400 mt-1">No filter — all quartiles included</p>}
+          </div>
+
+          {/* Indexing Filter */}
+          <div className="mb-5">
+            <p className="text-sm font-medium text-gray-700 mb-2">Filter by Indexing</p>
+            <div className="flex flex-wrap gap-2">
+              {['Scopus', 'Google Scholar', 'Web of Science'].map(idx => (
+                <button key={idx} onClick={() => toggleIndexing(idx)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${selectedIndexing.includes(idx) ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'}`}>
+                  {idx}
+                </button>
+              ))}
+            </div>
+            {selectedIndexing.length === 0 && <p className="text-xs text-gray-400 mt-1">No filter — all indexing included</p>}
+          </div>
+
+          {/* Source Filter */}
+          <div className="mb-5">
+            <p className="text-sm font-medium text-gray-700 mb-2">Filter by Import Source</p>
+            <div className="flex flex-wrap gap-2">
+              {[{ value: 'google_scholar', label: 'Google Scholar' }, { value: 'scopus', label: 'Scopus' }, { value: 'web_of_science', label: 'Web of Science' }, { value: 'manual', label: 'Manually Added' }].map(src => (
+                <button key={src.value} onClick={() => toggleSource(src.value)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${selectedSources.includes(src.value) ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'}`}>
+                  {src.label}
+                </button>
+              ))}
+            </div>
+            {selectedSources.length === 0 && <p className="text-xs text-gray-400 mt-1">No filter — all sources included</p>}
+          </div>
+
+          <div className="mb-6">
+            <ColumnPicker columns={PUB_EXPORT_COLUMNS} selected={selectedColumns} onToggle={toggleCol}
+              onSelectAll={() => setSelectedColumns(PUB_EXPORT_COLUMNS.map(c => c.key))}
+              onClearAll={() => setSelectedColumns([])} />
+          </div>
+          {facultyIds.length > 1 && (
+            <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg mb-3">
+              ⚠️ {facultyIds.length} faculty selected — will download {facultyIds.length} separate CSV files.
+            </p>
+          )}
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={onClose} disabled={isExporting}>Cancel</Button>
+            <Button onClick={handleExport} disabled={isExporting || selectedColumns.length === 0} className="bg-teal-600 hover:bg-teal-700 text-white">
+              <FileDown className="w-4 h-4 mr-2" />{isExporting ? 'Exporting...' : 'Export CSV'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ExportConfModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: currentYear - 1989 }, (_, i) => String(currentYear - i));
+  const academicYearOptions = Array.from({ length: currentYear - 1989 }, (_, i) => {
+    const start = currentYear - i;
+    return { value: `${start}-${String(start + 1).slice(2)}`, label: `${start}-${String(start + 1).slice(2)}` };
+  });
+
+  const [filterMode, setFilterMode] = useState<'range' | 'academic'>('range');
+  const [fromYear, setFromYear] = useState('');
+  const [toYear, setToYear] = useState('');
+  const [selectedAcademicYear, setSelectedAcademicYear] = useState('');
+  const [facultyIds, setFacultyIds] = useState<string[]>([]);
+  const [selectedType, setSelectedType] = useState<string[]>([]);
+  const [selectedColumns, setSelectedColumns] = useState<string[]>(CONF_EXPORT_COLUMNS.map(c => c.key));
+  const [isExporting, setIsExporting] = useState(false);
+
+  const toggleType = (v: string) =>
+    setSelectedType(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
+  const toggleCol = (k: string) =>
+    setSelectedColumns(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
+
+  const handleExport = async () => {
+    if (selectedColumns.length === 0) { alert('Please select at least one column.'); return; }
+    setIsExporting(true);
+    try {
+      const token = localStorage.getItem('authToken') || '';
+      const base = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+      const targets = facultyIds.length > 0 ? facultyIds : [null];
+      for (const fid of targets) {
+        const params = new URLSearchParams();
+        if (fid) params.set('facultyId', fid);
+        if (filterMode === 'range') {
+          if (fromYear) params.set('fromYear', fromYear);
+          if (toYear) params.set('toYear', toYear);
+        } else if (selectedAcademicYear) {
+          params.set('fromYear', selectedAcademicYear.split('-')[0]);
+          params.set('toYear', selectedAcademicYear.split('-')[0]);
+        }
+        if (selectedType.length === 1) params.set('type', selectedType[0]);
+        params.set('columns', selectedColumns.join(','));
+        const response = await fetch(`${base}/conferences/export/csv?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!response.ok) throw new Error('Export failed');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `conferences_${fid || 'all'}_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+      onClose();
+    } catch { alert('Failed to export. Please try again.'); }
+    finally { setIsExporting(false); }
+  };
+
+  if (!isOpen) return null;
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+        <div className="p-2">
+          <div className="flex items-center gap-2 mb-5">
+            <FileDown className="w-5 h-5 text-teal-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Export Conferences to CSV</h2>
+          </div>
+          <FacultyPicker selected={facultyIds} onChange={setFacultyIds} />
+          <div className="mb-4">
+            <p className="text-sm font-medium text-gray-700 mb-2">Filter by Year</p>
+            <div className="flex gap-2 mb-3">
+              <button onClick={() => { setFilterMode('range'); setSelectedAcademicYear(''); }}
+                className={`px-4 py-1.5 rounded-full text-xs font-medium border transition-colors ${filterMode === 'range' ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'}`}>Year Range</button>
+              <button onClick={() => { setFilterMode('academic'); setFromYear(''); setToYear(''); }}
+                className={`px-4 py-1.5 rounded-full text-xs font-medium border transition-colors ${filterMode === 'academic' ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'}`}>Academic Year</button>
+            </div>
+            {filterMode === 'range' ? (
+              <div className="flex items-center gap-3">
+                <div className="flex-1">
+                  <label className="text-xs text-gray-500 mb-1 block">From Year</label>
+                  <select value={fromYear} onChange={e => setFromYear(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+                    <option value="">All Years</option>{years.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+                <span className="text-gray-400 mt-5">—</span>
+                <div className="flex-1">
+                  <label className="text-xs text-gray-500 mb-1 block">To Year</label>
+                  <select value={toYear} onChange={e => setToYear(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+                    <option value="">All Years</option>{years.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <select value={selectedAcademicYear} onChange={e => setSelectedAcademicYear(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+                <option value="">All Academic Years</option>
+                {academicYearOptions.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+              </select>
+            )}
+          </div>
+          <div className="mb-5">
+            <p className="text-sm font-medium text-gray-700 mb-2">Filter by Type</p>
+            <div className="flex flex-wrap gap-2">
+              {['International', 'National'].map(t => (
+                <button key={t} onClick={() => toggleType(t)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${selectedType.includes(t) ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'}`}>{t}</button>
+              ))}
+            </div>
+            {selectedType.length === 0 && <p className="text-xs text-gray-400 mt-1">No filter — all types included</p>}
+          </div>
+          <div className="mb-6">
+            <ColumnPicker columns={CONF_EXPORT_COLUMNS} selected={selectedColumns} onToggle={toggleCol}
+              onSelectAll={() => setSelectedColumns(CONF_EXPORT_COLUMNS.map(c => c.key))}
+              onClearAll={() => setSelectedColumns([])} />
+          </div>
+          {facultyIds.length > 1 && (
+            <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg mb-3">
+              ⚠️ {facultyIds.length} faculty selected — will download {facultyIds.length} separate CSV files.
+            </p>
+          )}
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={onClose} disabled={isExporting}>Cancel</Button>
+            <Button onClick={handleExport} disabled={isExporting || selectedColumns.length === 0} className="bg-teal-600 hover:bg-teal-700 text-white">
+              <FileDown className="w-4 h-4 mr-2" />{isExporting ? 'Exporting...' : 'Export CSV'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ExportBookModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: currentYear - 1989 }, (_, i) => String(currentYear - i));
+  const academicYearOptions = Array.from({ length: currentYear - 1989 }, (_, i) => {
+    const start = currentYear - i;
+    return { value: `${start}-${String(start + 1).slice(2)}`, label: `${start}-${String(start + 1).slice(2)}` };
+  });
+
+  const [filterMode, setFilterMode] = useState<'range' | 'academic'>('range');
+  const [fromYear, setFromYear] = useState('');
+  const [toYear, setToYear] = useState('');
+  const [selectedAcademicYear, setSelectedAcademicYear] = useState('');
+  const [facultyIds, setFacultyIds] = useState<string[]>([]);
+  const [selectedType, setSelectedType] = useState<string[]>([]);
+  const [selectedColumns, setSelectedColumns] = useState<string[]>(BOOK_EXPORT_COLUMNS.map(c => c.key));
+  const [isExporting, setIsExporting] = useState(false);
+
+  const toggleType = (v: string) =>
+    setSelectedType(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
+  const toggleCol = (k: string) =>
+    setSelectedColumns(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
+
+  const handleExport = async () => {
+    if (selectedColumns.length === 0) { alert('Please select at least one column.'); return; }
+    setIsExporting(true);
+    try {
+      const token = localStorage.getItem('authToken') || '';
+      const base = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+      const targets = facultyIds.length > 0 ? facultyIds : [null];
+      for (const fid of targets) {
+        const params = new URLSearchParams();
+        if (fid) params.set('facultyId', fid);
+        if (filterMode === 'range') {
+          if (fromYear) params.set('fromYear', fromYear);
+          if (toYear) params.set('toYear', toYear);
+        } else if (selectedAcademicYear) {
+          params.set('fromYear', selectedAcademicYear.split('-')[0]);
+          params.set('toYear', selectedAcademicYear.split('-')[0]);
+        }
+        if (selectedType.length === 1) params.set('type', selectedType[0]);
+        params.set('columns', selectedColumns.join(','));
+        const response = await fetch(`${base}/books/export/csv?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!response.ok) throw new Error('Export failed');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `books_${fid || 'all'}_${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+      onClose();
+    } catch { alert('Failed to export. Please try again.'); }
+    finally { setIsExporting(false); }
+  };
+
+  if (!isOpen) return null;
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+        <div className="p-2">
+          <div className="flex items-center gap-2 mb-5">
+            <FileDown className="w-5 h-5 text-teal-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Export Books & Chapters to CSV</h2>
+          </div>
+          <FacultyPicker selected={facultyIds} onChange={setFacultyIds} />
+          <div className="mb-4">
+            <p className="text-sm font-medium text-gray-700 mb-2">Filter by Year</p>
+            <div className="flex gap-2 mb-3">
+              <button onClick={() => { setFilterMode('range'); setSelectedAcademicYear(''); }}
+                className={`px-4 py-1.5 rounded-full text-xs font-medium border transition-colors ${filterMode === 'range' ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'}`}>Year Range</button>
+              <button onClick={() => { setFilterMode('academic'); setFromYear(''); setToYear(''); }}
+                className={`px-4 py-1.5 rounded-full text-xs font-medium border transition-colors ${filterMode === 'academic' ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'}`}>Academic Year</button>
+            </div>
+            {filterMode === 'range' ? (
+              <div className="flex items-center gap-3">
+                <div className="flex-1">
+                  <label className="text-xs text-gray-500 mb-1 block">From Year</label>
+                  <select value={fromYear} onChange={e => setFromYear(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+                    <option value="">All Years</option>{years.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+                <span className="text-gray-400 mt-5">—</span>
+                <div className="flex-1">
+                  <label className="text-xs text-gray-500 mb-1 block">To Year</label>
+                  <select value={toYear} onChange={e => setToYear(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+                    <option value="">All Years</option>{years.map(y => <option key={y} value={y}>{y}</option>)}
+                  </select>
+                </div>
+              </div>
+            ) : (
+              <select value={selectedAcademicYear} onChange={e => setSelectedAcademicYear(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300">
+                <option value="">All Academic Years</option>
+                {academicYearOptions.map(y => <option key={y.value} value={y.value}>{y.label}</option>)}
+              </select>
+            )}
+          </div>
+          <div className="mb-5">
+            <p className="text-sm font-medium text-gray-700 mb-2">Filter by Type</p>
+            <div className="flex flex-wrap gap-2">
+              {['Book', 'Book Chapter', 'Edited Book', 'Monograph'].map(t => (
+                <button key={t} onClick={() => toggleType(t)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${selectedType.includes(t) ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-600 border-gray-300 hover:border-teal-400'}`}>{t}</button>
+              ))}
+            </div>
+            {selectedType.length === 0 && <p className="text-xs text-gray-400 mt-1">No filter — all types included</p>}
+          </div>
+          <div className="mb-6">
+            <ColumnPicker columns={BOOK_EXPORT_COLUMNS} selected={selectedColumns} onToggle={toggleCol}
+              onSelectAll={() => setSelectedColumns(BOOK_EXPORT_COLUMNS.map(c => c.key))}
+              onClearAll={() => setSelectedColumns([])} />
+          </div>
+          {facultyIds.length > 1 && (
+            <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg mb-3">
+              ⚠️ {facultyIds.length} faculty selected — will download {facultyIds.length} separate CSV files.
+            </p>
+          )}
+          <div className="flex justify-end gap-3">
+            <Button variant="outline" onClick={onClose} disabled={isExporting}>Cancel</Button>
+            <Button onClick={handleExport} disabled={isExporting || selectedColumns.length === 0} className="bg-teal-600 hover:bg-teal-700 text-white">
+              <FileDown className="w-4 h-4 mr-2" />{isExporting ? 'Exporting...' : 'Export CSV'}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Global Export Modal ───────────────────────────────────────────────────────
+
+function GlobalExportModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
+  const [exportPubs, setExportPubs] = useState(true);
+  const [exportConfs, setExportConfs] = useState(true);
+  const [exportBooks, setExportBooks] = useState(true);
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: currentYear - 1989 }, (_, i) => String(currentYear - i));
+  const [fromYear, setFromYear] = useState('');
+  const [toYear, setToYear] = useState('');
+  const [facultyId, setFacultyId] = useState('');
+  const [pubCols, setPubCols] = useState<string[]>(PUB_EXPORT_COLUMNS.map(c => c.key));
+  const [confCols, setConfCols] = useState<string[]>(CONF_EXPORT_COLUMNS.map(c => c.key));
+  const [bookCols, setBookCols] = useState<string[]>(BOOK_EXPORT_COLUMNS.map(c => c.key));
+  const [activeTab, setActiveTab] = useState<'pub' | 'conf' | 'book'>('pub');
+  const [isExporting, setIsExporting] = useState(false);
+  const [progress, setProgress] = useState('');
+
+  const togglePubCol = (k: string) => setPubCols(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
+  const toggleConfCol = (k: string) => setConfCols(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
+  const toggleBookCol = (k: string) => setBookCols(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]);
+
+  const doExport = async (endpoint: string, colKeys: string[], filename: string) => {
+    const params = new URLSearchParams();
+    if (facultyId) params.set('facultyId', facultyId);
+    if (fromYear) params.set('fromYear', fromYear);
+    if (toYear) params.set('toYear', toYear);
+    params.set('columns', colKeys.join(','));
+    const token = localStorage.getItem('authToken') || '';
+    const response = await fetch(
+      `${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/${endpoint}/export/csv?${params}`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    if (!response.ok) throw new Error(`Export failed for ${endpoint}`);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportAll = async () => {
+    if (!exportPubs && !exportConfs && !exportBooks) { alert('Please select at least one data type to export.'); return; }
+    const date = new Date().toISOString().split('T')[0];
+    setIsExporting(true);
+    try {
+      if (exportPubs && pubCols.length > 0) { setProgress('Exporting publications...'); await doExport('publications', pubCols, `publications_admin_${date}.csv`); }
+      if (exportConfs && confCols.length > 0) { setProgress('Exporting conferences...'); await doExport('conferences', confCols, `conferences_admin_${date}.csv`); }
+      if (exportBooks && bookCols.length > 0) { setProgress('Exporting books...'); await doExport('books', bookCols, `books_admin_${date}.csv`); }
+      setProgress(''); onClose();
+    } catch { alert('One or more exports failed. Please try again.'); setProgress(''); }
+    finally { setIsExporting(false); }
+  };
+
+  if (!isOpen) return null;
+
+  const tabs = [
+    { id: 'pub' as const, label: 'Publications', enabled: exportPubs, setEnabled: setExportPubs },
+    { id: 'conf' as const, label: 'Conferences', enabled: exportConfs, setEnabled: setExportConfs },
+    { id: 'book' as const, label: 'Books', enabled: exportBooks, setEnabled: setExportBooks },
+  ];
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onClose}>
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="p-2">
+          <div className="flex items-center gap-2 mb-1">
+            <FileDown className="w-5 h-5 text-teal-600" />
+            <h2 className="text-lg font-semibold text-gray-900">Export All Research Data</h2>
+          </div>
+          <p className="text-xs text-gray-500 mb-5">Each selected type will be downloaded as a separate CSV file.</p>
+          <div className="bg-gray-50 rounded-xl p-4 mb-5 border border-gray-100">
+            <p className="text-sm font-semibold text-gray-700 mb-3">Shared Filters</p>
+            <FacultyPicker selected={facultyId} onChange={setFacultyId} />
+            <YearRangePicker fromYear={fromYear} toYear={toYear} onFromYear={setFromYear} onToYear={setToYear} years={years} />
+          </div>
+          <div className="mb-4">
+            <p className="text-sm font-medium text-gray-700 mb-3">Select Data Types to Export</p>
+            <div className="flex gap-2 flex-wrap">
+              {tabs.map(tab => (
+                <button key={tab.id} onClick={() => { tab.setEnabled(!tab.enabled); if (!tab.enabled) setActiveTab(tab.id); }}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium border-2 transition-all ${tab.enabled ? 'bg-teal-600 text-white border-teal-600' : 'bg-white text-gray-400 border-gray-200'}`}>
+                  <span className={`w-3.5 h-3.5 rounded-sm border-2 flex items-center justify-center ${tab.enabled ? 'border-white bg-white/30' : 'border-gray-300'}`}>
+                    {tab.enabled && <span className="text-white text-[10px] font-bold">✓</span>}
+                  </span>
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="mb-2">
+            <div className="flex gap-1 border-b border-gray-200 mb-4">
+              {tabs.map(tab => (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === tab.id ? 'border-teal-600 text-teal-700' : 'border-transparent text-gray-500 hover:text-gray-700'} ${!tab.enabled ? 'opacity-40' : ''}`}>
+                  {tab.label}{!tab.enabled && <span className="ml-1 text-xs">(skipped)</span>}
+                </button>
+              ))}
+            </div>
+            {activeTab === 'pub' && <ColumnPicker columns={PUB_EXPORT_COLUMNS} selected={pubCols} onToggle={togglePubCol} onSelectAll={() => setPubCols(PUB_EXPORT_COLUMNS.map(c => c.key))} onClearAll={() => setPubCols([])} />}
+            {activeTab === 'conf' && <ColumnPicker columns={CONF_EXPORT_COLUMNS} selected={confCols} onToggle={toggleConfCol} onSelectAll={() => setConfCols(CONF_EXPORT_COLUMNS.map(c => c.key))} onClearAll={() => setConfCols([])} />}
+            {activeTab === 'book' && <ColumnPicker columns={BOOK_EXPORT_COLUMNS} selected={bookCols} onToggle={toggleBookCol} onSelectAll={() => setBookCols(BOOK_EXPORT_COLUMNS.map(c => c.key))} onClearAll={() => setBookCols([])} />}
+          </div>
+          {progress && (
+            <div className="flex items-center gap-2 my-3 text-sm text-teal-700 bg-teal-50 rounded-lg px-3 py-2">
+              <div className="animate-spin w-3.5 h-3.5 border-2 border-teal-600 border-t-transparent rounded-full" />
+              {progress}
+            </div>
+          )}
+          <div className="flex justify-end gap-3 mt-5">
+            <Button variant="outline" onClick={onClose} disabled={isExporting}>Cancel</Button>
+            <Button onClick={handleExportAll} disabled={isExporting} className="bg-teal-600 hover:bg-teal-700 text-white">
+              <FileDown className="w-4 h-4 mr-2" />
+              {isExporting ? 'Exporting...' : `Export ${[exportPubs, exportConfs, exportBooks].filter(Boolean).length} CSV${[exportPubs, exportConfs, exportBooks].filter(Boolean).length !== 1 ? 's' : ''}`}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Main AdminDashboard ───────────────────────────────────────────────────────
+
 export function AdminDashboard({ onLogout }: AdminDashboardProps) {
-  const [activeMenuItem, setActiveMenuItem] = useState('overview');
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const activeMenuItem = location.pathname === '/admin/faculty'
+    ? 'faculty'
+    : location.pathname === '/admin/settings'
+    ? 'settings'
+    : 'overview';
 
   const [globalSearch, setGlobalSearch] = useState('');
   const [globalYear, setGlobalYear] = useState<string>('all');
@@ -137,21 +954,99 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteSuccess, setDeleteSuccess] = useState('');
 
+  // Export modal states
+  const [isGlobalExportOpen, setIsGlobalExportOpen] = useState(false);
+  const [isPubExportOpen, setIsPubExportOpen] = useState(false);
+  const [isConfExportOpen, setIsConfExportOpen] = useState(false);
+  const [isBookExportOpen, setIsBookExportOpen] = useState(false);
+
+  // ── Flag states ──────────────────────────────────────────────────────────
+  const [allFlags, setAllFlags] = useState<any[]>([]);
+  const [allPotentialFlags, setAllPotentialFlags] = useState<any[]>([]);
+  const [selectedPubs, setSelectedPubs] = useState<Set<string>>(new Set());
+  const [selectedConfs, setSelectedConfs] = useState<Set<string>>(new Set());
+  const [selectedBooks, setSelectedBooks] = useState<Set<string>>(new Set());
+  const [isFlagModalOpen, setIsFlagModalOpen] = useState(false);
+  const [flagModalItems, setFlagModalItems] = useState<{ id: string; title: string }[]>([]);
+  const [flagModalType, setFlagModalType] = useState<'publication' | 'conference' | 'book'>('publication');
+  const [reviewFaculty, setReviewFaculty] = useState<{ name: string; flags: any[] } | null>(null);
+
   const allAcademicYears = generateAcademicYears();
+
+  // ── Flag lookup map ──────────────────────────────────────────────────────
+  const flagMap = useMemo(() => {
+    const map: Record<string, any[]> = {};
+    allFlags.forEach(flag => {
+const key = `${flag.item_type}_${String(flag.item_id)}`;
+      if (!map[key]) map[key] = [];
+      map[key].push(flag);    });
+    return map;
+  }, [allFlags]);
+
+  // ── Flag helpers ─────────────────────────────────────────────────────────
+  const getItemFlags = (type: string, id: string) => {
+    const key = `${type}_${String(id)}`;
+    const result = flagMap[key]?.filter(f => f.status !== 'resolved') || [];
+    if (result.length > 0) console.log('🚩 FLAG HIT:', key, result);
+    return result;
+  };
+
+  const openFlagModal = (type: 'publication' | 'conference' | 'book', items: { id: string; title: string }[]) => {
+    setFlagModalType(type);
+    setFlagModalItems(items);
+    setIsFlagModalOpen(true);
+  };
+
+  const handleApproveFlag = async (flagId: number) => {
+    const token = localStorage.getItem('authToken') || '';
+    await fetch(`${import.meta.env.VITE_API_URL}/flags/${flagId}/approve`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ approvedBy: 'Admin' }),
+    });
+    await loadAllData();
+        setReviewFaculty(prev => prev ? { ...prev, flags: prev.flags.map(f => f.id === flagId ? { ...f, status: 'resolved' } : f) } : null);
+
+  };
+
+  const handleApproveAll = async (flagIds: number[]) => {
+    for (const id of flagIds) await handleApproveFlag(id);
+  };
+
+const handleDeleteFlag = async (flagId: number) => {
+    const token = localStorage.getItem('authToken') || '';
+    await fetch(`${import.meta.env.VITE_API_URL}/flags/${flagId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    setAllFlags(prev => prev.filter(f => f.id !== flagId));
+
+  };
 
   useEffect(() => { loadAllData(); }, []);
 
   const loadAllData = async () => {
     setIsLoading(true);
     try {
-      const [pubsRes, confsRes, booksRes] = await Promise.all([
+      const token = localStorage.getItem('authToken') || '';
+      const [pubsRes, confsRes, booksRes, flagsRes, potentialFlagsRes] = await Promise.all([
         api.publications.getAll(),
         api.conferences.getAll(),
         api.books.getAll(),
+        fetch(`${import.meta.env.VITE_API_URL}/flags`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${import.meta.env.VITE_API_URL}/potential-flags/all`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
       ]);
       if (pubsRes.success && pubsRes.data) setAllPublications(pubsRes.data);
       if (confsRes.success && confsRes.data) setAllConferences(confsRes.data);
       if (booksRes.success && booksRes.data) setAllBooksChapters(booksRes.data);
+      const flagsJson = await flagsRes.json();
+      if (flagsJson.success) setAllFlags(flagsJson.data);
+      const potentialFlagsJson = await potentialFlagsRes.json();
+      if (potentialFlagsJson.success) setAllPotentialFlags(potentialFlagsJson.data);
     } catch (error) {
       console.error('Failed to load admin data:', error);
     } finally {
@@ -162,24 +1057,33 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const filterPubs = (pubs: Publication[], search: string, year: string) =>
     pubs.filter(p => {
       const s = search.toLowerCase();
-      const matchSearch = !search || p.title.toLowerCase().includes(s) || p.journal.toLowerCase().includes(s) ||
-        p.authors.some(a => a.toLowerCase().includes(s)) || (p.facultyName && p.facultyName.toLowerCase().includes(s));
+      const matchSearch = !search ||
+        (p.title || '').toLowerCase().includes(s) ||
+        (p.journal || '').toLowerCase().includes(s) ||
+        (Array.isArray(p.authors) ? p.authors : []).some(a => (a || '').toLowerCase().includes(s)) ||
+        (p.facultyName || '').toLowerCase().includes(s);
       return matchSearch && (year === 'all' || parseAcademicYear(p.academicYear) === year);
     });
 
   const filterConfs = (confs: Conference[], search: string, year: string) =>
     confs.filter(c => {
       const s = search.toLowerCase();
-      const matchSearch = !search || c.title.toLowerCase().includes(s) || c.conferenceName.toLowerCase().includes(s) ||
-        c.authors.some(a => a.toLowerCase().includes(s)) || (c.facultyName && c.facultyName.toLowerCase().includes(s));
+      const matchSearch = !search ||
+        (c.title || '').toLowerCase().includes(s) ||
+        (c.conferenceName || '').toLowerCase().includes(s) ||
+        (Array.isArray(c.authors) ? c.authors : []).some(a => (a || '').toLowerCase().includes(s)) ||
+        (c.facultyName || '').toLowerCase().includes(s);
       return matchSearch && (year === 'all' || parseAcademicYear(c.academicYear) === year);
     });
 
   const filterBooks = (books: BookChapter[], search: string, year: string) =>
     books.filter(b => {
       const s = search.toLowerCase();
-      const matchSearch = !search || b.title.toLowerCase().includes(s) || b.authorName.toLowerCase().includes(s) ||
-        b.publisher.toLowerCase().includes(s) || (b.facultyName && b.facultyName.toLowerCase().includes(s));
+      const matchSearch = !search ||
+        (b.title || '').toLowerCase().includes(s) ||
+        (b.authorName || '').toLowerCase().includes(s) ||
+        (b.publisher || '').toLowerCase().includes(s) ||
+        (b.facultyName || '').toLowerCase().includes(s);
       return matchSearch && (year === 'all' || parseAcademicYear(b.academicYear) === year);
     });
 
@@ -201,6 +1105,7 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
       if (res.success) {
         setDeleteTarget(null);
         await loadAllData();
+
         setDeleteSuccess('Deleted Successfully!');
         setTimeout(() => setDeleteSuccess(''), 2000);
       }
@@ -208,101 +1113,30 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
     finally { setIsDeleting(false); }
   };
 
-  // ✅ Admin edit handlers — inject "Admin" as editor name
   const handleEditPub = async (data: any) => {
     if (!editingPub) return;
-    const enrichedData = {
-      ...data,
-      lastEditedBy: 'Admin',
-      lastEditedAt: new Date().toISOString(),
-    };
-    const res = await api.publications.update(editingPub.id, enrichedData);
+    const res = await api.publications.update(editingPub.id, { ...data, lastEditedBy: 'Admin' });
     if (res.success) { await loadAllData(); setEditingPub(null); } else throw new Error('Failed');
   };
 
   const handleEditConf = async (data: any) => {
     if (!editingConf) return;
-    const enrichedData = {
-      ...data,
-      lastEditedBy: 'Admin',
-      lastEditedAt: new Date().toISOString(),
-    };
-    const res = await api.conferences.update(editingConf.id, enrichedData);
+    const res = await api.conferences.update(editingConf.id, { ...data, lastEditedBy: 'Admin' });
     if (res.success) { await loadAllData(); setEditingConf(null); } else throw new Error('Failed');
   };
 
   const handleEditBook = async (data: any) => {
     if (!editingBook) return;
-    const enrichedData = {
-      ...data,
-      lastEditedBy: 'Admin',
-      lastEditedAt: new Date().toISOString(),
-    };
-    const res = await api.books.update(editingBook.id, enrichedData);
+    const res = await api.books.update(editingBook.id, { ...data, lastEditedBy: 'Admin' });
     if (res.success) { await loadAllData(); setEditingBook(null); } else throw new Error('Failed');
   };
 
   const getFileData = (item: any) => (item as any).fileUrl || item.fileData;
 
-  const sidebarItems = [
-    { id: 'overview', label: 'Overview', icon: BarChart3 },
-    { id: 'faculty', label: 'Faculty Directory', icon: Users },
-    { id: 'settings', label: 'Settings', icon: Settings },
-  ];
-
-  const SidebarContent = () => (
-    <nav className="p-4">
-      <ul className="space-y-1">
-        {sidebarItems.map(({ id, label, icon: Icon }) => (
-          <li key={id}>
-            <button
-              onClick={() => { setActiveMenuItem(id); setMobileSidebarOpen(false); }}
-              className={`w-full flex items-center space-x-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
-                activeMenuItem === id ? 'bg-teal-50 text-teal-700 font-medium' : 'text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              <Icon className="w-5 h-5 flex-shrink-0" />
-              <span>{label}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
-
-  const ActionCell = ({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) => (
-    <TableCell>
-      <div className="flex items-center gap-1">
-        <Button variant="ghost" size="sm" onClick={onEdit} className="text-teal-600 hover:text-teal-700 hover:bg-teal-50 p-1">
-          <Pencil className="w-3.5 h-3.5" />
-        </Button>
-        <Button variant="ghost" size="sm" onClick={onDelete} className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1">
-          <Trash2 className="w-3.5 h-3.5" />
-        </Button>
-      </div>
-    </TableCell>
-  );
-
-  const SectionSearch = ({ search, setSearch, year, setYear, placeholder }: {
-    search: string; setSearch: (v: string) => void;
-    year: string; setYear: (v: string) => void; placeholder: string;
-  }) => (
-    <div className="flex flex-col sm:flex-row gap-3 p-4 border-b border-gray-100 bg-gray-50/50" style={{ overflow: 'visible', position: 'relative', zIndex: 5 }}>
-      <div style={{ overflow: 'visible', position: 'relative', zIndex: 10 }}>
-        <FilterDropdown selectedValue={year} onValueChange={setYear} options={allAcademicYears} placeholder="All Years" />
-      </div>
-      <div className="relative flex-1">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
-        <Input placeholder={placeholder} value={search} onChange={(e) => setSearch(e.target.value)}
-          className="pl-10 bg-white border-gray-200 focus:border-teal-400 h-9 text-sm" />
-      </div>
-    </div>
-  );
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-teal-50 via-emerald-50 to-green-50">
 
-      {/* Modals */}
+      {/* ── Modals ── */}
       <DeleteModal
         open={!!deleteTarget}
         title={`Delete ${deleteTarget?.type === 'pub' ? 'Publication' : deleteTarget?.type === 'conf' ? 'Conference' : 'Book/Chapter'}?`}
@@ -314,97 +1148,80 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
       {editingConf && <AddConferenceForm isOpen={!!editingConf} onClose={() => setEditingConf(null)} onSubmit={handleEditConf} initialData={editingConf} />}
       {editingBook && <AddBookForm isOpen={!!editingBook} onClose={() => setEditingBook(null)} onSubmit={handleEditBook} initialData={editingBook} />}
 
-      {/* ── DESKTOP LAYOUT ── */}
-      <div className="hidden md:flex min-h-screen">
-        <aside className="w-56 bg-white border-r border-teal-100 shadow-sm flex-shrink-0 flex flex-col">
-          <div className="p-4 border-b border-teal-50">
-            <div className="flex items-center space-x-3">
-              <GitamLogo className="w-9 h-9" />
-              <div>
-                <p className="text-sm font-semibold text-gray-800">Admin</p>
-                <p className="text-xs" style={{ color: "#006B64" }}>GITAM Portal</p>
-              </div>
-            </div>
-          </div>
-          <SidebarContent />
-          <div className="mt-auto p-4 border-t border-gray-100">
-            <Button onClick={onLogout} variant="outline" size="sm" className="w-full text-red-600 border-red-300 hover:bg-red-50 text-xs">
-              <LogOut className="w-4 h-4 mr-2" />Logout
-            </Button>
-          </div>
-        </aside>
+      {/* Export modals */}
+      <GlobalExportModal isOpen={isGlobalExportOpen} onClose={() => setIsGlobalExportOpen(false)} />
+      <ExportPubModal isOpen={isPubExportOpen} onClose={() => setIsPubExportOpen(false)} />
+      <ExportConfModal isOpen={isConfExportOpen} onClose={() => setIsConfExportOpen(false)} />
+      <ExportBookModal isOpen={isBookExportOpen} onClose={() => setIsBookExportOpen(false)} />
 
-        <div className="flex-1 flex flex-col min-w-0">
-          <header className="bg-white shadow-sm border-b border-teal-100 px-6 py-3 flex items-center justify-between sticky top-0 z-20">
-            <h1 className="text-lg font-semibold text-gray-800">
-              {activeMenuItem === 'overview' ? 'Research Overview' : activeMenuItem === 'faculty' ? 'Faculty Directory' : 'Settings'}
-            </h1>
-            <p className="text-sm text-gray-500">GITAM University Research Portal</p>
-          </header>
-          <main className="flex-1 p-6 lg:p-8 overflow-auto">
-            <PageContent
-              activeMenuItem={activeMenuItem} isLoading={isLoading}
-              globalSearch={globalSearch} setGlobalSearch={setGlobalSearch}
-              globalYear={globalYear} setGlobalYear={setGlobalYear}
-              allPublications={allPublications} allConferences={allConferences} allBooksChapters={allBooksChapters}
-              filteredPublications={filteredPublications} filteredConferences={filteredConferences} filteredBooksChapters={filteredBooksChapters}
-              pubSearch={pubSearch} setPubSearch={setPubSearch} pubYear={pubYear} setPubYear={setPubYear}
-              confSearch={confSearch} setConfSearch={setConfSearch} confYear={confYear} setConfYear={setConfYear}
-              bookSearch={bookSearch} setBookSearch={setBookSearch} bookYear={bookYear} setBookYear={setBookYear}
-              publicationsOpen={publicationsOpen} setPublicationsOpen={setPublicationsOpen}
-              conferencesOpen={conferencesOpen} setConferencesOpen={setConferencesOpen}
-              booksOpen={booksOpen} setBooksOpen={setBooksOpen}
-              allAcademicYears={allAcademicYears}
-              setEditingPub={setEditingPub} setEditingConf={setEditingConf} setEditingBook={setEditingBook}
-              setDeleteTarget={setDeleteTarget}
-              getFileData={getFileData} SectionSearch={SectionSearch} ActionCell={ActionCell}
-            />
-          </main>
-        </div>
-      </div>
+      {/* Flag modals */}
+      <FlagModal
+        isOpen={isFlagModalOpen}
+        onClose={() => {
+          setIsFlagModalOpen(false);
+          setSelectedPubs(new Set());
+          setSelectedConfs(new Set());
+          setSelectedBooks(new Set());
+        }}
+        selectedItems={flagModalItems}
+        itemType={flagModalType}
+        onSuccess={loadAllData}
+      />
+      <FlagReviewModal
+        isOpen={!!reviewFaculty}
+        onClose={() => setReviewFaculty(null)}
+        facultyName={reviewFaculty?.name || ''}
+        flags={reviewFaculty?.flags || []}
+        onApprove={handleApproveFlag}
+        onApproveAll={handleApproveAll}
+        onDelete={handleDeleteFlag}
+        onRefresh={loadAllData}
+      />
 
-      {/* ── MOBILE LAYOUT ── */}
-      <div className="md:hidden flex flex-col min-h-screen">
-        <header className="bg-white shadow-sm border-b border-teal-100 px-4 py-3 flex items-center justify-between sticky top-0 z-50">
-          <div className="flex items-center space-x-3">
-            <button onClick={() => setMobileSidebarOpen(true)} className="p-2 rounded-lg text-teal-600 hover:bg-teal-50 transition-colors">
-              <Menu className="w-5 h-5" />
-            </button>
-            <GitamLogo className="w-8 h-8" />
-            <h1 className="text-base font-semibold text-gray-800">Admin Dashboard</h1>
-          </div>
-          <Button onClick={onLogout} variant="outline" size="sm" className="text-red-600 border-red-300 hover:bg-red-50 text-xs">
-            <LogOut className="w-3 h-3 mr-1" />Exit
-          </Button>
-        </header>
-
-        {mobileSidebarOpen && (
-          <div className="fixed inset-0 z-50 flex">
-            <div className="absolute inset-0 bg-black/50" onClick={() => setMobileSidebarOpen(false)} />
-            <div className="relative z-10 w-64 bg-white shadow-xl flex flex-col">
-              <div className="flex items-center justify-between p-4 border-b border-gray-100">
-                <div className="flex items-center space-x-3">
-                  <GitamLogo className="w-8 h-8" />
-                  <div>
-                    <p className="text-sm font-semibold text-gray-800">Admin</p>
-                    <p className="text-xs" style={{ color: "#006B64" }}>GITAM Portal</p>
-                  </div>
+      <div className="flex flex-col min-h-screen">
+        {/* ── Header ── */}
+        <header style={{ backgroundColor: '#006B64', borderBottomLeftRadius: '24px', borderBottomRightRadius: '24px' }} className="shadow-md overflow-hidden flex-shrink-0">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center h-16">
+              <div className="flex items-center gap-3">
+                <GitamLogo className="w-9 h-9" />
+                <div>
+                  <p className="text-base font-semibold text-white leading-tight">Admin Dashboard</p>
+                  <p className="text-xs" style={{ color: 'rgba(255,255,255,0.65)' }}>GITAM University Research Portal</p>
                 </div>
-                <button onClick={() => setMobileSidebarOpen(false)} className="p-1 text-gray-500 hover:text-gray-700">
-                  <X className="w-5 h-5" />
-                </button>
+                <div className="w-px h-6 bg-white/20 mx-1" />
+                <div className="flex items-center gap-1">
+                  <button onClick={() => navigate('/admin')}
+                    className="flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-all"
+                    style={activeMenuItem === 'overview' ? { backgroundColor: 'rgba(255,255,255,0.25)', color: 'white' } : { backgroundColor: 'transparent', color: 'rgba(255,255,255,0.7)' }}>
+                    <BarChart3 className="w-4 h-4" />Overview
+                  </button>
+                  <button onClick={() => navigate('/admin/faculty')}
+                    className="flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-medium transition-all"
+                    style={activeMenuItem === 'faculty' ? { backgroundColor: 'rgba(255,255,255,0.25)', color: 'white' } : { backgroundColor: 'transparent', color: 'rgba(255,255,255,0.7)' }}>
+                    <Users className="w-4 h-4" />Faculty Directory
+                  </button>
+                </div>
               </div>
-              <SidebarContent />
-              <div className="mt-auto p-4 border-t border-gray-100">
-                <Button onClick={onLogout} variant="outline" size="sm" className="w-full text-red-600 border-red-300 hover:bg-red-50 text-xs">
-                  <LogOut className="w-4 h-4 mr-2" />Logout
+              <div className="flex items-center gap-2">
+                {activeMenuItem === 'overview' && (
+                  <Button onClick={() => setIsGlobalExportOpen(true)}
+                    className="text-white border text-sm h-8 px-3 transition-colors"
+                    style={{ backgroundColor: 'rgba(255,255,255,0.15)', borderColor: 'rgba(255,255,255,0.3)' }}>
+                    <FileDown className="w-3.5 h-3.5 mr-1.5" />Export All
+                  </Button>
+                )}
+                <Button onClick={onLogout}
+                  className="text-sm h-8 px-3 transition-colors"
+                  style={{ backgroundColor: 'rgba(220,50,50,0.25)', border: '1px solid rgba(255,150,150,0.35)', color: '#ffb0b0' }}>
+                  <LogOut className="w-3.5 h-3.5 mr-1.5" />Logout
                 </Button>
               </div>
             </div>
           </div>
-        )}
+        </header>
 
-        <main className="flex-1 p-4">
+        <main className="flex-1 p-6 lg:p-8 overflow-auto max-w-7xl mx-auto w-full">
           <PageContent
             activeMenuItem={activeMenuItem} isLoading={isLoading}
             globalSearch={globalSearch} setGlobalSearch={setGlobalSearch}
@@ -420,7 +1237,31 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
             allAcademicYears={allAcademicYears}
             setEditingPub={setEditingPub} setEditingConf={setEditingConf} setEditingBook={setEditingBook}
             setDeleteTarget={setDeleteTarget}
-            getFileData={getFileData} SectionSearch={SectionSearch} ActionCell={ActionCell}
+            getFileData={getFileData}
+            onOpenPubExport={() => setIsPubExportOpen(true)}
+            onOpenConfExport={() => setIsConfExportOpen(true)}
+            onOpenBookExport={() => setIsBookExportOpen(true)}
+            onOpenGlobalExport={() => setIsGlobalExportOpen(true)}
+            // Flag props
+            allFlags={allFlags}
+            selectedPubs={selectedPubs} setSelectedPubs={setSelectedPubs}
+            selectedConfs={selectedConfs} setSelectedConfs={setSelectedConfs}
+            selectedBooks={selectedBooks} setSelectedBooks={setSelectedBooks}
+             getItemFlags={getItemFlags}
+            openFlagModal={openFlagModal}
+            setReviewFaculty={setReviewFaculty}
+            onDeleteFlag={handleDeleteFlag}
+            allPotentialFlags={allPotentialFlags}
+            onEscalatePotentialFlag={async (pfId: number, pubId: string, title: string) => {
+              const token = localStorage.getItem('authToken') || '';
+              await fetch(`${import.meta.env.VITE_API_URL}/potential-flags/${pfId}/escalate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ reason: `Missing required fields detected at import` }),
+              });
+              await loadAllData();
+            }}
+
           />
         </main>
       </div>
@@ -428,7 +1269,255 @@ export function AdminDashboard({ onLogout }: AdminDashboardProps) {
   );
 }
 
-// ── Page Content (shared between desktop and mobile) ──────────────
+// ── Stable module-level components ────────────────────────────────────────────
+
+function ActionCell({ onEdit, onDelete }: { onEdit: () => void; onDelete: () => void }) {
+  return (
+    <TableCell>
+      <div className="flex items-center gap-1">
+        <Button variant="ghost" size="sm" onClick={onEdit} className="text-teal-600 hover:text-teal-700 hover:bg-teal-50 p-1">
+          <Pencil className="w-3.5 h-3.5" />
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onDelete} className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1">
+          <Trash2 className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+    </TableCell>
+  );
+}
+
+function SectionSearch({ search, setSearch, year, setYear, placeholder, allAcademicYears, onExport }: {
+  search: string; setSearch: (v: string) => void;
+  year: string; setYear: (v: string) => void;
+  placeholder: string; allAcademicYears: string[];
+  onExport: () => void;
+}) {
+  return (
+    <div className="flex flex-col sm:flex-row gap-3 p-4 border-b border-gray-100 bg-gray-50/50 items-center" style={{ overflow: 'visible', position: 'relative', zIndex: 5 }}>
+      <div style={{ overflow: 'visible', position: 'relative', zIndex: 10 }}>
+        <FilterDropdown selectedValue={year} onValueChange={setYear} options={allAcademicYears} placeholder="All Years" />
+      </div>
+      <div className="relative flex-1">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+        <Input placeholder={placeholder} value={search} onChange={(e) => setSearch(e.target.value)}
+          className="pl-10 bg-white border-gray-200 focus:border-teal-400 h-9 text-sm" />
+      </div>
+      <Button onClick={onExport} variant="outline" size="sm"
+        className="border-teal-300 text-teal-700 hover:bg-teal-50 h-9 px-3 text-sm whitespace-nowrap flex-shrink-0">
+        <FileDown className="w-3.5 h-3.5 mr-1.5" />Export CSV
+      </Button>
+    </div>
+  );
+}
+
+
+// ── Journal Rankings Admin Panel ──────────────────────────────────────────────
+
+function JournalRankingsAdmin() {
+  const [year, setYear] = useState(String(new Date().getFullYear()));
+  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<string>('');
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState<string>('');
+  const [stats, setStats] = useState<any>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+
+  const token = () => localStorage.getItem('authToken') || '';
+  const base = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+  const loadStats = async () => {
+    setStatsLoading(true);
+    try {
+      const res = await fetch(`${base}/journal-rankings/stats`, {
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      const json = await res.json();
+      if (json.success) setStats(json);
+    } catch { /* non-fatal */ }
+    finally { setStatsLoading(false); }
+  };
+
+  useEffect(() => { loadStats(); }, []);
+
+  const handleImport = async () => {
+    if (!csvFile) { alert('Please select a CSV file first.'); return; }
+    setImporting(true);
+    setImportResult('');
+    try {
+      const formData = new FormData();
+      formData.append('csv', csvFile);
+      const res = await fetch(`${base}/journal-rankings/import-csv?year=${year}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token()}` },
+        body: formData,
+      });
+      const json = await res.json();
+      if (json.success) {
+        setImportResult(`✅ Imported ${json.inserted.toLocaleString()} journal rankings for ${year}`);
+        setCsvFile(null);
+        await loadStats();
+      } else {
+        setImportResult(`❌ ${json.message}`);
+      }
+    // AFTER
+    } catch (e: any) {
+      setImportResult(`❌ Import failed: ${e.message}. If file too large, check server upload limit.`);
+
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleBackfill = async () => {
+    setBackfilling(true);
+    setBackfillResult('⏳ Backfill started in background — check server logs for progress.');
+    try {
+      const res = await fetch(`${base}/journal-rankings/backfill-quartiles`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token()}` },
+      });
+      const json = await res.json();
+      setBackfillResult(json.success
+        ? '✅ Backfill triggered — quartiles will be populated in the background.'
+        : `❌ ${json.message}`);
+    } catch (e: any) {
+      setBackfillResult(`❌ ${e.message}`);
+    } finally {
+      setBackfilling(false);
+    }
+  };
+
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: currentYear - 1998 }, (_, i) => String(currentYear - i));
+
+  return (
+    <Card className="bg-white/95 shadow-lg border-0 rounded-xl overflow-hidden">
+      <CardHeader className="bg-gradient-to-r from-teal-700 to-teal-800 text-white py-4">
+        <CardTitle className="flex items-center gap-2 text-sm sm:text-base">
+          <Database className="w-4 h-4 sm:w-5 sm:h-5" />
+          Journal Rankings (Scimago)
+          {stats && (
+            <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full ml-1">
+              {stats.stats?.total_rows?.toLocaleString() || 0} entries · {stats.stats?.year_count || 0} years
+            </span>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="p-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+          {/* ── Import CSV ── */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+              <FileDown className="w-4 h-4 text-teal-600" />
+              Import Scimago CSV
+            </h3>
+            <p className="text-xs text-gray-500">
+              Download from{' '}
+              <a href="https://www.scimagojr.com/journalrank.php" target="_blank" rel="noopener noreferrer"
+                className="text-teal-600 underline hover:text-teal-800">scimagojr.com</a>
+              {' '}→ "Download data" at the bottom. Import one year at a time.
+            </p>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-600 font-medium w-10 flex-shrink-0">Year</label>
+              <select
+                value={year}
+                onChange={e => setYear(e.target.value)}
+                className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-teal-300"
+              >
+                {years.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-600 font-medium w-10 flex-shrink-0">File</label>
+              <label className="flex-1 cursor-pointer">
+                <div className={`border-2 border-dashed rounded-lg px-3 py-2 text-sm transition-colors ${csvFile ? 'border-teal-400 bg-teal-50 text-teal-700' : 'border-gray-200 text-gray-400 hover:border-teal-300'}`}>
+                  {csvFile ? `📄 ${csvFile.name}` : 'Click to select CSV file...'}
+                </div>
+                <input
+                  type="file"
+                  accept=".csv,.xls"
+                  className="hidden"
+                  onChange={e => { setCsvFile(e.target.files?.[0] || null); setImportResult(''); }}
+                />
+              </label>
+            </div>
+            <Button
+              onClick={handleImport}
+              disabled={importing || !csvFile}
+              className="bg-teal-600 hover:bg-teal-700 text-white h-9 px-4 text-sm"
+            >
+              {importing
+                ? <><div className="animate-spin w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full mr-2" />Importing...</>
+                : <><FileDown className="w-3.5 h-3.5 mr-2" />Import {year}</>
+              }
+            </Button>
+            {importResult && (
+              <p className={`text-xs px-3 py-2 rounded-lg ${importResult.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                {importResult}
+              </p>
+            )}
+          </div>
+
+          {/* ── Backfill + Stats ── */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+              <BarChart3 className="w-4 h-4 text-teal-600" />
+              Backfill Existing Publications
+            </h3>
+            <p className="text-xs text-gray-500">
+              Populates quartile, SJR score, and CiteScore for all existing publications that currently have empty quartile fields. Runs in the background.
+            </p>
+            <Button
+              onClick={handleBackfill}
+              disabled={backfilling}
+              variant="outline"
+              className="border-teal-300 text-teal-700 hover:bg-teal-50 h-9 px-4 text-sm"
+            >
+              {backfilling
+                ? <><div className="animate-spin w-3.5 h-3.5 border-2 border-teal-600 border-t-transparent rounded-full mr-2" />Starting...</>
+                : <><Database className="w-3.5 h-3.5 mr-2" />Backfill Quartiles</>
+              }
+            </Button>
+            {backfillResult && (
+              <p className={`text-xs px-3 py-2 rounded-lg ${backfillResult.startsWith('✅') ? 'bg-green-50 text-green-700' : backfillResult.startsWith('⏳') ? 'bg-blue-50 text-blue-700' : 'bg-red-50 text-red-700'}`}>
+                {backfillResult}
+              </p>
+            )}
+
+            {/* Stats */}
+            {stats?.byYear?.length > 0 && (
+              <div className="mt-3 border border-gray-100 rounded-lg overflow-hidden">
+                <div className="bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600">
+                  Imported Years
+                </div>
+                <div className="max-h-32 overflow-y-auto">
+                  {stats.byYear.map((row: any) => (
+                    <div key={row.year} className="flex justify-between px-3 py-1 text-xs border-t border-gray-50 hover:bg-gray-50">
+                      <span className="text-gray-600">{row.year}</span>
+                      <span className="text-gray-800 font-medium">{Number(row.count).toLocaleString()} journals</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {statsLoading && <p className="text-xs text-gray-400">Loading stats...</p>}
+            {!statsLoading && stats?.stats?.total_rows === 0 && (
+              <p className="text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-lg">
+                ⚠️ No journal rankings imported yet. Import a Scimago CSV to enable quartile auto-population.
+              </p>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+
+// ── Page Content ──────────────────────────────────────────────────────────────
+
 function PageContent({
   activeMenuItem, isLoading,
   globalSearch, setGlobalSearch, globalYear, setGlobalYear,
@@ -443,7 +1532,19 @@ function PageContent({
   allAcademicYears,
   setEditingPub, setEditingConf, setEditingBook,
   setDeleteTarget,
-  getFileData, SectionSearch, ActionCell,
+  getFileData,
+  onOpenPubExport, onOpenConfExport, onOpenBookExport, onOpenGlobalExport,
+  // Flag props
+  allFlags,
+  selectedPubs, setSelectedPubs,
+  selectedConfs, setSelectedConfs,
+  selectedBooks, setSelectedBooks,
+   getItemFlags,
+  openFlagModal,
+  setReviewFaculty,
+  onDeleteFlag,
+  allPotentialFlags,
+  onEscalatePotentialFlag,
 }: any) {
 
   const openFile = (fileData: string, fileName: string) => {
@@ -455,14 +1556,24 @@ function PageContent({
     const a = document.createElement('a'); a.href = fileData; a.download = fileName || 'file'; a.click();
   };
 
-  if (activeMenuItem === 'faculty') return <FacultyDirectory />;
+  // Build flags-per-faculty map for Faculty Directory column
+  const flagsPerFaculty = useMemo(() => {
+    return allFlags.reduce((acc: Record<string, any[]>, flag: any) => {
+      const code = flag.faculty_code;
+      if (!acc[code]) acc[code] = [];
+      acc[code].push(flag);
+      return acc;
+    }, {});
+  }, [allFlags]);
 
-  if (activeMenuItem === 'settings') return (
-    <Card className="bg-white/95 shadow-lg border-0 rounded-xl">
-      <CardHeader><CardTitle className="flex items-center space-x-2"><Settings className="w-5 h-5" /><span>Settings</span></CardTitle></CardHeader>
-      <CardContent><p className="text-gray-600">Admin settings and configuration options will be available here.</p></CardContent>
-    </Card>
-  );
+  if (activeMenuItem === 'faculty') {
+    return (
+      <FacultyDirectory
+        flagsPerFaculty={flagsPerFaculty}
+        onReviewFaculty={(name: string, flags: any[]) => setReviewFaculty({ name, flags })}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -471,7 +1582,7 @@ function PageContent({
         <p className="text-sm text-gray-600">Comprehensive view of all academic publications, conferences, and books across GITAM faculty</p>
       </div>
 
-      {/* Global Search */}
+      {/* Global Search + Export All */}
       <Card className="bg-white/95 shadow-lg border-0 rounded-xl" style={{ overflow: 'visible', position: 'relative', zIndex: 20 }}>
         <CardContent className="p-4" style={{ overflow: 'visible' }}>
           <div className="flex flex-col sm:flex-row gap-3" style={{ overflow: 'visible' }}>
@@ -484,6 +1595,9 @@ function PageContent({
                 onChange={(e) => setGlobalSearch(e.target.value)}
                 className="pl-10 bg-gray-50 border-gray-200 focus:border-teal-400 w-full" />
             </div>
+            <Button onClick={onOpenGlobalExport} className="bg-teal-600 hover:bg-teal-700 text-white h-10 px-4 text-sm whitespace-nowrap flex-shrink-0">
+              <FileDown className="w-4 h-4 mr-1.5" />Export All
+            </Button>
             <div className="text-xs text-gray-500 self-center whitespace-nowrap">
               {allPublications.length + allConferences.length + allBooksChapters.length} total records
             </div>
@@ -515,6 +1629,8 @@ function PageContent({
         ))}
       </div>
 
+   <JournalRankingsAdmin />
+
       {isLoading ? (
         <Card className="bg-white/95 shadow-lg border-0 rounded-xl">
           <CardContent className="p-16 text-center">
@@ -524,23 +1640,49 @@ function PageContent({
         </Card>
       ) : (
         <>
-          {/* Publications */}
+          {/* ── Publications ── */}
           <Collapsible open={publicationsOpen} onOpenChange={setPublicationsOpen}>
             <Card className="bg-white/95 shadow-lg border-0 rounded-xl overflow-hidden">
               <CollapsibleTrigger asChild>
-                <CardHeader className="bg-gradient-to-r from-teal-600 to-teal-700 text-white cursor-pointer hover:from-teal-700 hover:to-teal-800 transition-all">
+                <CardHeader className="bg-gradient-to-r from-teal-600 to-teal-700 text-white cursor-pointer hover:from-teal-700 hover:to-teal-800 transition-all py-4 flex items-center">
                   <CardTitle className="flex items-center justify-between text-sm sm:text-base">
                     <div className="flex items-center space-x-2">
                       <Database className="w-4 h-4 sm:w-5 sm:h-5" />
                       <span>Publications Database</span>
                       <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{filteredPublications.length}</span>
                     </div>
-                    {publicationsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    <div className="flex items-center gap-2">
+                      {publicationsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </div>
                   </CardTitle>
                 </CardHeader>
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <SectionSearch search={pubSearch} setSearch={setPubSearch} year={pubYear} setYear={setPubYear} placeholder="Search publications..." />
+                <SectionSearch
+                  search={pubSearch} setSearch={setPubSearch}
+                  year={pubYear} setYear={setPubYear}
+                  placeholder="Search publications..." allAcademicYears={allAcademicYears}
+                  onExport={onOpenPubExport}
+                />
+                {/* Flag Selected button for publications */}
+                {selectedPubs.size > 0 && (
+                  <div className="px-4 py-2 bg-red-50 border-b border-red-100 flex items-center gap-3">
+                    <Button
+                      onClick={() => openFlagModal('publication',
+                        filteredPublications
+                          .filter((p: Publication) => selectedPubs.has(p.id))
+                          .map((p: Publication) => ({ id: p.id, title: p.title }))
+                      )}
+                      className="bg-red-600 hover:bg-red-700 text-white h-8 px-3 text-xs"
+                    >
+                      <Flag className="w-3.5 h-3.5 mr-1.5" />
+                      Flag Selected ({selectedPubs.size})
+                    </Button>
+                    <button onClick={() => setSelectedPubs(new Set())} className="text-xs text-gray-500 hover:text-gray-700">
+                      Clear selection
+                    </button>
+                  </div>
+                )}
                 <CardContent className="p-0">
                   {filteredPublications.length === 0 ? (
                     <div className="text-center py-12"><Database className="w-12 h-12 text-gray-300 mx-auto mb-3" /><div className="text-gray-500 text-sm">No publications found</div></div>
@@ -550,11 +1692,24 @@ function PageContent({
                         <Table>
                           <TableHeader className="sticky top-0 z-10 bg-gray-50">
                             <TableRow className="bg-gray-50">
+                              {/* Select All checkbox */}
+                              <TableHead className="w-10">
+                                <input
+                                  type="checkbox"
+                                  onChange={e => {
+                                    if (e.target.checked) setSelectedPubs(new Set(filteredPublications.map((p: Publication) => p.id)));
+                                    else setSelectedPubs(new Set());
+                                  }}
+                                  checked={filteredPublications.length > 0 && filteredPublications.every((p: Publication) => selectedPubs.has(p.id))}
+                                  className="w-4 h-4 accent-teal-600"
+                                />
+                              </TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[200px]">Title</TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[150px]">Journal</TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[70px]">Quartile</TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[90px]">Impact Factor</TableHead>
-                              <TableHead className="font-semibold text-gray-700 min-w-[90px]">CiteScore</TableHead>
+<TableHead className="font-semibold text-gray-700 min-w-[90px]">SJR Score</TableHead>
+<TableHead className="font-semibold text-gray-700 min-w-[90px]">CiteScore</TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[160px]">Authors</TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[100px]">Position</TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[90px]">Volume/Issue</TableHead>
@@ -571,17 +1726,72 @@ function PageContent({
                           <TableBody>
                             {filteredPublications.map((pub: Publication) => {
                               const fd = getFileData(pub);
+                              const itemFlags = getItemFlags('publication', pub.id);
                               return (
                                 <TableRow key={pub.id} className="hover:bg-gray-50">
+                                  {/* Row checkbox */}
+                                  <TableCell>
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedPubs.has(pub.id)}
+                                      onChange={e => {
+                                        const next = new Set(selectedPubs);
+                                        e.target.checked ? next.add(pub.id) : next.delete(pub.id);
+                                        setSelectedPubs(next);
+                                      }}
+                                      className="w-4 h-4 accent-teal-600"
+                                    />
+                                  </TableCell>
+                                  {/* Title with blinking dot */}
                                   <TableCell className="font-medium">
-                                    {/* ✅ Title + subtle edit badge */}
-                                    <div className="text-sm leading-tight">{pub.title}</div>
-                                    <EditedBadge by={(pub as any).lastEditedBy} at={(pub as any).lastEditedAt} />
+                                    <div className="flex items-center gap-1">
+                                      {itemFlags.length > 0 && (
+  <div className="flex items-center gap-1 flex-shrink-0">
+    <BlinkingDot color={itemFlags.some(f => f.status === 'flagged') ? 'red' : 'amber'} />
+<button onClick={() => onDeleteFlag(itemFlags[0].id)} title="Remove flag"
+      className="w-4 h-4 rounded-full bg-red-100 hover:bg-red-200 text-red-400 hover:text-red-600 transition-colors flex items-center justify-center text-[10px] leading-none flex-shrink-0">✕</button>
+
+  </div>
+)}
+                                    <div>
+                                        <div className="text-sm leading-tight">{pub.title}</div>
+                                        <EditedBadge by={(pub as any).lastEditedBy} at={(pub as any).lastEditedAt} />
+                                        {(() => {
+                                          const pf = allPotentialFlags?.find((p: any) => String(p.publication_id) === String(pub.id));
+                                          if (!pf) return null;
+                                          return (
+                                            <div className="mt-1 flex items-center gap-1.5">
+                                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-100 text-amber-700 border border-amber-200">
+                                                <span style={{ display:'inline-block', width:5, height:5, borderRadius:'50%', backgroundColor:'#f59e0b' }} />
+                                                ⚠️ Potential — Missing: {pf.missing_fields.join(', ')}
+                                              </span>
+                                              <button
+                                                onClick={() => onEscalatePotentialFlag(pf.id, pub.id, pub.title)}
+                                                className="text-[10px] text-red-600 hover:text-red-800 underline font-medium"
+                                              >
+                                                Escalate to Flag
+                                              </button>
+                                            </div>
+                                          );
+                                        })()}
+                                      </div>
+                                    </div>
                                   </TableCell>
                                   <TableCell><div className="text-sm">{pub.journal}</div></TableCell>
-                                  <TableCell><span className="px-2 py-1 rounded text-xs text-white" style={{ backgroundColor: "#006B64" }}>{pub.quartile}</span></TableCell>
                                   <TableCell><div className="text-sm">{pub.impactFactor}</div></TableCell>
-                                  <TableCell><div className="text-sm">{pub.citeScore}</div></TableCell>
+
+                                  <TableCell>
+  {pub.quartile ? (
+    <span className={`px-2 py-1 rounded text-xs text-white`} style={{ backgroundColor:
+      pub.quartile === 'Q1' ? '#16a34a' :
+      pub.quartile === 'Q2' ? '#2563eb' :
+      pub.quartile === 'Q3' ? '#f97316' :
+      pub.quartile === 'Q4' ? '#ef4444' : '#006B64'
+    }}>{pub.quartile}</span>
+  ) : <span className="text-xs text-gray-400">N/A</span>}
+</TableCell>
+<TableCell><div className="text-sm">{(pub as any).sjrScore}</div></TableCell>
+<TableCell><div className="text-sm">{pub.citeScore}</div></TableCell>
                                   <TableCell><div className="text-sm">{pub.authors.join(', ')}</div></TableCell>
                                   <TableCell><div className="text-sm">{pub.positionOfAuthor}</div></TableCell>
                                   <TableCell><div className="text-sm">{pub.volume}{pub.issue ? `(${pub.issue})` : ''}</div></TableCell>
@@ -606,23 +1816,49 @@ function PageContent({
             </Card>
           </Collapsible>
 
-          {/* Conferences */}
+          {/* ── Conferences ── */}
           <Collapsible open={conferencesOpen} onOpenChange={setConferencesOpen}>
             <Card className="bg-white/95 shadow-lg border-0 rounded-xl overflow-hidden">
               <CollapsibleTrigger asChild>
-                <CardHeader className="bg-gradient-to-r from-teal-600 to-teal-700 text-white cursor-pointer hover:from-teal-700 hover:to-teal-800 transition-all">
+                <CardHeader className="bg-gradient-to-r from-teal-600 to-teal-700 text-white cursor-pointer hover:from-teal-700 hover:to-teal-800 transition-all py-4 flex items-center">
                   <CardTitle className="flex items-center justify-between text-sm sm:text-base">
                     <div className="flex items-center space-x-2">
                       <Users className="w-4 h-4 sm:w-5 sm:h-5" />
                       <span>Conferences Database</span>
                       <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{filteredConferences.length}</span>
                     </div>
-                    {conferencesOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    <div className="flex items-center gap-2">
+                      {conferencesOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </div>
                   </CardTitle>
                 </CardHeader>
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <SectionSearch search={confSearch} setSearch={setConfSearch} year={confYear} setYear={setConfYear} placeholder="Search conferences..." />
+                <SectionSearch
+                  search={confSearch} setSearch={setConfSearch}
+                  year={confYear} setYear={setConfYear}
+                  placeholder="Search conferences..." allAcademicYears={allAcademicYears}
+                  onExport={onOpenConfExport}
+                />
+                {/* Flag Selected button for conferences */}
+                {selectedConfs.size > 0 && (
+                  <div className="px-4 py-2 bg-red-50 border-b border-red-100 flex items-center gap-3">
+                    <Button
+                      onClick={() => openFlagModal('conference',
+                        filteredConferences
+                          .filter((c: Conference) => selectedConfs.has(c.id))
+                          .map((c: Conference) => ({ id: c.id, title: c.title }))
+                      )}
+                      className="bg-red-600 hover:bg-red-700 text-white h-8 px-3 text-xs"
+                    >
+                      <Flag className="w-3.5 h-3.5 mr-1.5" />
+                      Flag Selected ({selectedConfs.size})
+                    </Button>
+                    <button onClick={() => setSelectedConfs(new Set())} className="text-xs text-gray-500 hover:text-gray-700">
+                      Clear selection
+                    </button>
+                  </div>
+                )}
                 <CardContent className="p-0">
                   {filteredConferences.length === 0 ? (
                     <div className="text-center py-12"><Users className="w-12 h-12 text-gray-300 mx-auto mb-3" /><div className="text-gray-500 text-sm">No conferences found</div></div>
@@ -632,6 +1868,18 @@ function PageContent({
                         <Table>
                           <TableHeader className="sticky top-0 z-10 bg-gray-50">
                             <TableRow className="bg-gray-50">
+                              {/* Select All checkbox */}
+                              <TableHead className="w-10">
+                                <input
+                                  type="checkbox"
+                                  onChange={e => {
+                                    if (e.target.checked) setSelectedConfs(new Set(filteredConferences.map((c: Conference) => c.id)));
+                                    else setSelectedConfs(new Set());
+                                  }}
+                                  checked={filteredConferences.length > 0 && filteredConferences.every((c: Conference) => selectedConfs.has(c.id))}
+                                  className="w-4 h-4 accent-teal-600"
+                                />
+                              </TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[200px]">Title</TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[180px]">Conference Name</TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[100px]">Date</TableHead>
@@ -649,12 +1897,38 @@ function PageContent({
                           <TableBody>
                             {filteredConferences.map((conf: Conference) => {
                               const fd = getFileData(conf);
+                              const itemFlags = getItemFlags('conference', conf.id);
                               return (
                                 <TableRow key={conf.id} className="hover:bg-gray-50">
+                                  {/* Row checkbox */}
+                                  <TableCell>
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedConfs.has(conf.id)}
+                                      onChange={e => {
+                                        const next = new Set(selectedConfs);
+                                        e.target.checked ? next.add(conf.id) : next.delete(conf.id);
+                                        setSelectedConfs(next);
+                                      }}
+                                      className="w-4 h-4 accent-teal-600"
+                                    />
+                                  </TableCell>
+                                  {/* Title with blinking dot */}
                                   <TableCell className="font-medium">
-                                    {/* ✅ Title + subtle edit badge */}
-                                    <div className="text-sm leading-tight">{conf.title}</div>
-                                    <EditedBadge by={(conf as any).lastEditedBy} at={(conf as any).lastEditedAt} />
+                                    <div className="flex items-center gap-1">
+                                      {itemFlags.length > 0 && (
+  <div className="flex items-center gap-1 flex-shrink-0">
+    <BlinkingDot color={itemFlags.some(f => f.status === 'flagged') ? 'red' : 'amber'} />
+<button onClick={() => onDeleteFlag(itemFlags[0].id)} title="Remove flag"
+      className="w-4 h-4 rounded-full bg-red-100 hover:bg-red-200 text-red-400 hover:text-red-600 transition-colors flex items-center justify-center text-[10px] leading-none flex-shrink-0">✕</button>
+
+  </div>
+)}
+                                      <div>
+                                        <div className="text-sm leading-tight">{conf.title}</div>
+                                        <EditedBadge by={(conf as any).lastEditedBy} at={(conf as any).lastEditedAt} />
+                                      </div>
+                                    </div>
                                   </TableCell>
                                   <TableCell><div className="text-sm">{conf.conferenceName}</div></TableCell>
                                   <TableCell><div className="text-sm">{new Date(conf.date).toLocaleDateString()}</div></TableCell>
@@ -680,23 +1954,49 @@ function PageContent({
             </Card>
           </Collapsible>
 
-          {/* Books */}
+          {/* ── Books ── */}
           <Collapsible open={booksOpen} onOpenChange={setBooksOpen}>
             <Card className="bg-white/95 shadow-lg border-0 rounded-xl overflow-hidden">
               <CollapsibleTrigger asChild>
-                <CardHeader className="bg-gradient-to-r from-teal-600 to-teal-700 text-white cursor-pointer hover:from-teal-700 hover:to-teal-800 transition-all">
+                <CardHeader className="bg-gradient-to-r from-teal-600 to-teal-700 text-white cursor-pointer hover:from-teal-700 hover:to-teal-800 transition-all py-4 flex items-center">
                   <CardTitle className="flex items-center justify-between text-sm sm:text-base">
                     <div className="flex items-center space-x-2">
                       <BookOpen className="w-4 h-4 sm:w-5 sm:h-5" />
                       <span>Books & Book Chapters</span>
                       <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full">{filteredBooksChapters.length}</span>
                     </div>
-                    {booksOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    <div className="flex items-center gap-2">
+                      {booksOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </div>
                   </CardTitle>
                 </CardHeader>
               </CollapsibleTrigger>
               <CollapsibleContent>
-                <SectionSearch search={bookSearch} setSearch={setBookSearch} year={bookYear} setYear={setBookYear} placeholder="Search books and chapters..." />
+                <SectionSearch
+                  search={bookSearch} setSearch={setBookSearch}
+                  year={bookYear} setYear={setBookYear}
+                  placeholder="Search books and chapters..." allAcademicYears={allAcademicYears}
+                  onExport={onOpenBookExport}
+                />
+                {/* Flag Selected button for books */}
+                {selectedBooks.size > 0 && (
+                  <div className="px-4 py-2 bg-red-50 border-b border-red-100 flex items-center gap-3">
+                    <Button
+                      onClick={() => openFlagModal('book',
+                        filteredBooksChapters
+                          .filter((b: BookChapter) => selectedBooks.has(b.id))
+                          .map((b: BookChapter) => ({ id: b.id, title: b.title }))
+                      )}
+                      className="bg-red-600 hover:bg-red-700 text-white h-8 px-3 text-xs"
+                    >
+                      <Flag className="w-3.5 h-3.5 mr-1.5" />
+                      Flag Selected ({selectedBooks.size})
+                    </Button>
+                    <button onClick={() => setSelectedBooks(new Set())} className="text-xs text-gray-500 hover:text-gray-700">
+                      Clear selection
+                    </button>
+                  </div>
+                )}
                 <CardContent className="p-0">
                   {filteredBooksChapters.length === 0 ? (
                     <div className="text-center py-12"><BookOpen className="w-12 h-12 text-gray-300 mx-auto mb-3" /><div className="text-gray-500 text-sm">No books or chapters found</div></div>
@@ -706,6 +2006,18 @@ function PageContent({
                         <Table>
                           <TableHeader className="sticky top-0 z-10 bg-gray-50">
                             <TableRow className="bg-gray-50">
+                              {/* Select All checkbox */}
+                              <TableHead className="w-10">
+                                <input
+                                  type="checkbox"
+                                  onChange={e => {
+                                    if (e.target.checked) setSelectedBooks(new Set(filteredBooksChapters.map((b: BookChapter) => b.id)));
+                                    else setSelectedBooks(new Set());
+                                  }}
+                                  checked={filteredBooksChapters.length > 0 && filteredBooksChapters.every((b: BookChapter) => selectedBooks.has(b.id))}
+                                  className="w-4 h-4 accent-teal-600"
+                                />
+                              </TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[200px]">Title</TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[150px]">Author</TableHead>
                               <TableHead className="font-semibold text-gray-700 min-w-[150px]">Department</TableHead>
@@ -723,12 +2035,38 @@ function PageContent({
                           <TableBody>
                             {filteredBooksChapters.map((item: BookChapter) => {
                               const fd = getFileData(item);
+                              const itemFlags = getItemFlags('book', item.id);
                               return (
                                 <TableRow key={item.id} className="hover:bg-gray-50">
+                                  {/* Row checkbox */}
+                                  <TableCell>
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedBooks.has(item.id)}
+                                      onChange={e => {
+                                        const next = new Set(selectedBooks);
+                                        e.target.checked ? next.add(item.id) : next.delete(item.id);
+                                        setSelectedBooks(next);
+                                      }}
+                                      className="w-4 h-4 accent-teal-600"
+                                    />
+                                  </TableCell>
+                                  {/* Title with blinking dot */}
                                   <TableCell className="font-medium">
-                                    {/* ✅ Title + subtle edit badge */}
-                                    <div className="text-sm leading-tight">{item.title}</div>
-                                    <EditedBadge by={(item as any).lastEditedBy} at={(item as any).lastEditedAt} />
+                                    <div className="flex items-center gap-1">
+                                      {itemFlags.length > 0 && (
+  <div className="flex items-center gap-1 flex-shrink-0">
+    <BlinkingDot color={itemFlags.some(f => f.status === 'flagged') ? 'red' : 'amber'} />
+<button onClick={() => onDeleteFlag(itemFlags[0].id)} title="Remove flag"
+      className="w-4 h-4 rounded-full bg-red-100 hover:bg-red-200 text-red-400 hover:text-red-600 transition-colors flex items-center justify-center text-[10px] leading-none flex-shrink-0">✕</button>
+
+  </div>
+)}
+                                      <div>
+                                        <div className="text-sm leading-tight">{item.title}</div>
+                                        <EditedBadge by={(item as any).lastEditedBy} at={(item as any).lastEditedAt} />
+                                      </div>
+                                    </div>
                                   </TableCell>
                                   <TableCell><div className="text-sm">{item.authorName}</div></TableCell>
                                   <TableCell><div className="text-sm">{item.departmentAffiliation}</div></TableCell>

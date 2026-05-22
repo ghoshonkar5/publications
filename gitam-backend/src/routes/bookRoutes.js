@@ -1,4 +1,3 @@
-
 const express = require('express');
 const router = express.Router();
 const {
@@ -6,12 +5,14 @@ const {
     getBooksByFaculty,
     createBook,
     updateBook,
-    deleteBook
+    deleteBook,
+    exportBooksCSV
 } = require('../controllers/bookController');
 const { protect } = require('../middleware/authMiddleware');
 
 router.use(protect);
 
+router.get('/export/csv', exportBooksCSV);
 router.get('/', getAllBooks);
 router.get('/faculty/:facultyId', getBooksByFaculty);
 router.post('/', createBook);

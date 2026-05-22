@@ -54,13 +54,23 @@ exports.getConferencesByFaculty = async (req, res) => {
 exports.createConference = async (req, res) => {
     try {
         const { title, conferenceName, date, authors, type, doi, indexing, link, academicYear, host, fileUrl, fileName, fileType } = req.body;
-        const facultyResult = await pool.query('SELECT id FROM faculty WHERE user_id = $1', [req.user.userId]);
+       const facultyResult = await pool.query('SELECT id FROM faculty WHERE user_id = $1', [req.user.userId]);
         if (facultyResult.rows.length === 0) return res.status(404).json({ success: false, message: 'Faculty profile not found' });
+
+        const facultyDbId = facultyResult.rows[0].id;
+
+        const titleCheck = await pool.query(
+            'SELECT id FROM conferences WHERE faculty_id = $1 AND LOWER(title) = LOWER($2)',
+            [facultyDbId, title]
+        );
+        if (titleCheck.rows.length > 0) {
+            return res.status(409).json({ success: false, message: 'A conference with this title already exists in your portfolio.' });
+        }
 
         const result = await pool.query(
             `INSERT INTO conferences (faculty_id, title, conference_name, date, authors, type, doi, indexing, link, academic_year, host, file_url, file_name, file_type)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
-            [facultyResult.rows[0].id, title, conferenceName, date, authors, type, doi, indexing, link, academicYear, host, fileUrl, fileName, fileType]
+            [facultyDbId, title, conferenceName, date, authors, type, doi, indexing, link, academicYear, host, fileUrl, fileName, fileType]
         );
         res.status(201).json({ success: true, message: 'Conference created successfully', data: result.rows[0] });
     } catch (error) {
@@ -82,7 +92,6 @@ exports.updateConference = async (req, res) => {
             link: 'link', academicYear: 'academic_year', host: 'host',
             fileUrl: 'file_url', fileName: 'file_name', fileType: 'file_type',
             lastEditedBy: 'last_edited_by',
-            lastEditedAt: 'last_edited_at',
         };
 
         for (const [key, dbColumn] of Object.entries(fieldMap)) {
@@ -94,7 +103,9 @@ exports.updateConference = async (req, res) => {
         }
 
         if (fields.length === 0) return res.status(400).json({ success: false, message: 'No fields to update' });
-        fields.push(`updated_at = CURRENT_TIMESTAMP`);
+        // ✅ FIX: Use UTC timestamps
+        fields.push(`updated_at = NOW() AT TIME ZONE 'UTC'`);
+        fields.push(`last_edited_at = NOW() AT TIME ZONE 'UTC'`);
         values.push(id);
 
         const result = await pool.query(`UPDATE conferences SET ${fields.join(', ')} WHERE id = $${paramCount} RETURNING *`, values);
@@ -114,5 +125,59 @@ exports.deleteConference = async (req, res) => {
     } catch (error) {
         console.error('Delete conference error:', error);
         res.status(500).json({ success: false, message: 'Error deleting conference', error: error.message });
+    }
+};
+
+exports.exportConferencesCSV = async (req, res) => {
+    try {
+        const { facultyId, fromYear, toYear, type, columns } = req.query;
+
+        const selectedColumns = columns ? columns.split(',') : null;
+
+        let query = `SELECT c.*, f.name as faculty_name FROM conferences c JOIN faculty f ON c.faculty_id = f.id WHERE 1=1`;
+const params = [];
+let paramCount = 1;
+
+if (facultyId) {
+    query += ` AND f.faculty_id = $${paramCount}`;
+    params.push(facultyId);
+    paramCount++;
+}
+
+        if (fromYear) { query += ` AND EXTRACT(YEAR FROM c.date) >= $${paramCount}`; params.push(fromYear); paramCount++; }
+        if (toYear) { query += ` AND EXTRACT(YEAR FROM c.date) <= $${paramCount}`; params.push(toYear); paramCount++; }
+        if (type) { query += ` AND c.type = $${paramCount}`; params.push(type); paramCount++; }
+        query += ` ORDER BY c.date DESC`;
+
+        const result = await pool.query(query, params);
+
+        const ALL_COLUMNS = [
+            { key: 'title',         header: 'Title',         get: r => r.title || '' },
+            { key: 'conferenceName',header: 'Conference Name',get: r => r.conference_name || '' },
+            { key: 'date',          header: 'Date',          get: r => r.date ? new Date(r.date).toLocaleDateString('en-IN') : '' },
+            { key: 'authors',       header: 'Authors',       get: r => Array.isArray(r.authors) ? r.authors.join('; ') : (r.authors || '') },
+            { key: 'type',          header: 'Type',          get: r => r.type || '' },
+            { key: 'academicYear',  header: 'Academic Year', get: r => r.academic_year || '' },
+            { key: 'host',          header: 'Host',          get: r => r.host || '' },
+            { key: 'doi',           header: 'DOI',           get: r => r.doi || '' },
+            { key: 'indexing',      header: 'Indexing',      get: r => r.indexing || '' },
+            { key: 'link',          header: 'Link',          get: r => r.link || '' },
+        ];
+
+        const cols = selectedColumns
+            ? ALL_COLUMNS.filter(c => selectedColumns.includes(c.key))
+            : ALL_COLUMNS;
+
+        const escape = val => `"${String(val).replace(/"/g, '""')}"`;
+        const header = cols.map(c => escape(c.header)).join(',');
+        const rows = result.rows.map(r => cols.map(c => escape(c.get(r))).join(','));
+        const csv = [header, ...rows].join('\n');
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="conferences_${facultyId}_${new Date().toISOString().split('T')[0]}.csv"`);
+        res.send(csv);
+    } catch (error) {
+        console.error('Export conferences CSV error:', error);
+        res.status(500).json({ success: false, message: 'Error exporting conferences', error: error.message });
     }
 };

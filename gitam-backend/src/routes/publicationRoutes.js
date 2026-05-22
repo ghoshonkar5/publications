@@ -1,4 +1,3 @@
-
 const express = require('express');
 const router = express.Router();
 const {
@@ -8,7 +7,8 @@ const {
     createPublication,
     updatePublication,
     deletePublication,
-    getPublicationStats
+    getPublicationStats,
+    exportPublicationsCSV,   // ← NEW
 } = require('../controllers/publicationController');
 const { protect } = require('../middleware/authMiddleware');
 
@@ -17,6 +17,7 @@ router.use(protect);
 
 // Routes
 router.get('/', getAllPublications);
+router.get('/export/csv', exportPublicationsCSV);        // ← NEW — must be before /:id
 router.get('/faculty/:facultyId', getPublicationsByFaculty);
 router.get('/stats/:facultyId', getPublicationStats);
 router.get('/:id', getPublicationById);

@@ -1,12 +1,15 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
+import { Dialog, DialogContent } from "./ui/dialog";
 import { GitamLogo } from "./GitamLogo";
-import { User, BookOpen, Link, Camera, ArrowRight, CheckCircle, Plus, X } from "lucide-react";
+import { User, Phone, MapPin, Clock, BookOpen, Briefcase, Link, Camera, Save, ArrowLeft, CheckCircle, Plus, X } from "lucide-react";
 import { useAuth } from "./AuthContext";
 
-// ── Compress image (same as EditProfile) ─────────────────────────
+
+
+// ── Compress and resize image to max 200x200, max ~150KB ─────────
 const compressImage = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     if (file.size > 5 * 1024 * 1024) {
@@ -25,11 +28,18 @@ const compressImage = (file: File): Promise<string> => {
         } else {
           if (height > MAX) { width = Math.round(width * MAX / height); height = MAX; }
         }
-        canvas.width = width; canvas.height = height;
+        canvas.width = width;
+        canvas.height = height;
         const ctx = canvas.getContext('2d')!;
         ctx.drawImage(img, 0, 0, width, height);
         const base64 = canvas.toDataURL('image/jpeg', 0.75);
-        resolve(base64.length > 200000 ? canvas.toDataURL('image/jpeg', 0.5) : base64);
+        // Rough size check ~150KB limit
+        if (base64.length > 200000) {
+          const base64smaller = canvas.toDataURL('image/jpeg', 0.5);
+          resolve(base64smaller);
+        } else {
+          resolve(base64);
+        }
       };
       img.onerror = () => reject(new Error('Failed to load image'));
       img.src = e.target?.result as string;
@@ -39,10 +49,17 @@ const compressImage = (file: File): Promise<string> => {
   });
 };
 
-function InitialsAvatar({ name }: { name?: string }) {
-  const initials = (name || 'FA').split(' ').filter(Boolean).slice(0, 3).map(w => w[0].toUpperCase()).join('');
+// ── Initials avatar ──────────────────────────────────────────────
+function InitialsAvatar({ name, size = 'lg' }: { name?: string; size?: 'sm' | 'lg' }) {
+  const initials = (name || 'FA')
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 3)
+    .map(w => w[0].toUpperCase())
+    .join('');
+  const dim = size === 'lg' ? 'w-24 h-24 text-2xl' : 'w-10 h-10 text-sm';
   return (
-    <div className="w-20 h-20 rounded-full flex items-center justify-center font-semibold text-white text-xl"
+    <div className={`${dim} rounded-full flex items-center justify-center font-semibold text-white`}
       style={{ background: 'linear-gradient(135deg, #006B64 0%, #005A54 100%)' }}>
       {initials}
     </div>
@@ -60,7 +77,9 @@ function TagInput({ label, items, onChange, placeholder }: {
 
   const add = () => {
     const trimmed = inputVal.trim();
-    if (trimmed && !items.includes(trimmed)) onChange([...items, trimmed]);
+    if (trimmed && !items.includes(trimmed)) {
+      onChange([...items, trimmed]);
+    }
     setInputVal('');
   };
 
@@ -73,6 +92,7 @@ function TagInput({ label, items, onChange, placeholder }: {
   return (
     <div>
       <label className="block text-sm font-medium text-gray-700 mb-2">{label}</label>
+      {/* Existing tags */}
       {items.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
           {items.map((item, i) => (
@@ -86,10 +106,16 @@ function TagInput({ label, items, onChange, placeholder }: {
           ))}
         </div>
       )}
+      {/* Add new tag */}
       <div className="flex gap-2">
-        <input type="text" value={inputVal} onChange={e => setInputVal(e.target.value)}
-          onKeyDown={handleKey} placeholder={placeholder}
-          className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white" />
+        <input
+          type="text"
+          value={inputVal}
+          onChange={e => setInputVal(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder={placeholder}
+          className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 bg-white"
+        />
         <button type="button" onClick={add} disabled={!inputVal.trim()}
           className="flex items-center gap-1 px-3 py-2 rounded-lg text-sm text-white transition-colors disabled:opacity-40"
           style={{ backgroundColor: '#006B64' }}>
@@ -100,37 +126,71 @@ function TagInput({ label, items, onChange, placeholder }: {
   );
 }
 
-export function ProfileSetup() {
+export function EditProfile() {
+  const { user, saveExtendedProfile, updateProfileUrls } = useAuth();
   const navigate = useNavigate();
-  const { user, saveExtendedProfile, updateProfileUrls, updateProfile } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [saving, setSaving] = useState(false);
-  const [skipping, setSkipping] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [error, setError] = useState('');
   const [photoError, setPhotoError] = useState('');
 
-  // Tag list states
-  const [coursesList, setCoursesList] = useState<string[]>([]);
-  const [rolesList, setRolesList] = useState<string[]>([]);
+  // Tag list states — stored as arrays, joined to string on save
+  const parseList = (str?: string | null) => str ? str.split(',').map(s => s.trim()).filter(Boolean) : [];
+  const [researchList, setResearchList] = useState<string[]>(() => parseList(user?.researchArea));
+  const [coursesList, setCoursesList] = useState<string[]>(() => parseList(user?.coursesTaught));
+  const [rolesList, setRolesList] = useState<string[]>(() => parseList(user?.roles));
 
   const [form, setForm] = useState({
+    // Personal
     mobile: user?.mobile || '',
-    officeRoom: '',
-    yearsOfExperience: '',
-    officeHours: '',
-    linkedinUrl: '',
-    websiteUrl: '',
-    googleScholarUrl: '',
-    scopusUrl: '',
-    scopusUrl2: '',
-    scopusUrl3: '',    
-    wosUrl: '',
-    profilePhoto: '',
+    officeRoom: user?.officeRoom || '',
+    yearsOfExperience: user?.yearsOfExperience?.toString() || '',
+    // Academic (lists handled separately via TagInput)
+    officeHours: user?.officeHours || '',
+    // Links
+    linkedinUrl: user?.linkedinUrl || '',
+    websiteUrl: user?.websiteUrl || '',
+    googleScholarUrl: user?.googleScholarUrl || '',
+   scopusUrl: user?.scopusUrl || '',
+    scopusUrl2: (user as any)?.scopusUrl2 || '',
+    scopusUrl3: (user as any)?.scopusUrl3 || '',
+    wosUrl: user?.wosUrl || '',
+
+
+    // Photo
+    profilePhoto: user?.profilePhoto || '',
   });
 
-  const set = (field: string, value: string) =>
+  // Keep form in sync if user changes
+  useEffect(() => {
+    if (user) {
+      setForm({
+        mobile: user.mobile || '',
+        officeRoom: user.officeRoom || '',
+        yearsOfExperience: user.yearsOfExperience?.toString() || '',
+        officeHours: user.officeHours || '',
+        linkedinUrl: user.linkedinUrl || '',
+        websiteUrl: user.websiteUrl || '',
+        googleScholarUrl: user.googleScholarUrl || '',
+        scopusUrl: user.scopusUrl || '',
+        scopusUrl2: (user as any).scopusUrl2 || '',
+        scopusUrl3: (user as any).scopusUrl3 || '',
+        wosUrl: user.wosUrl || '',
+        profilePhoto: user.profilePhoto || '',
+      });
+      setResearchList(parseList(user.researchArea));
+      setCoursesList(parseList(user.coursesTaught));
+      setRolesList(parseList(user.roles));
+    }
+  }, [user]);
+
+  const set = (field: string, value: string) => {
     setForm(prev => ({ ...prev, [field]: value }));
+    setSaved(false);
+  };
 
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -142,25 +202,22 @@ export function ProfileSetup() {
     } catch (err: any) {
       setPhotoError(err.message || 'Failed to process image');
     }
+    // Reset input so same file can be re-selected
     e.target.value = '';
-  };
-
-  const handleSkip = async () => {
-    setSkipping(true);
-    // Just mark profile setup complete, don't save any data
-    await updateProfile({ profileSetupComplete: true, isFirstTimeLogin: false });
-    setSkipping(false);
-    // App.tsx will redirect to dashboard via user state change
   };
 
   const handleSave = async () => {
     setSaving(true);
     setError('');
+    setSaved(false);
+
     try {
+      // Save extended profile
       const profileResult = await saveExtendedProfile({
         mobile: form.mobile || null,
         officeRoom: form.officeRoom || null,
         yearsOfExperience: form.yearsOfExperience ? parseInt(form.yearsOfExperience) : null,
+        researchArea: researchList.join(', ') || null,
         coursesTaught: coursesList.join(', ') || null,
         officeHours: form.officeHours || null,
         roles: rolesList.join(', ') || null,
@@ -174,17 +231,21 @@ export function ProfileSetup() {
         return;
       }
 
-      if (form.googleScholarUrl || form.scopusUrl || form.wosUrl) {
-        await updateProfileUrls({
-          googleScholarUrl: form.googleScholarUrl,
-          scopusUrl: form.scopusUrl,
-          scopusUrl2: form.scopusUrl2,
-          scopusUrl3: form.scopusUrl3,
-          wosUrl: form.wosUrl,
-        });
+      // Save academic URLs separately
+      const urlResult = await updateProfileUrls({
+        googleScholarUrl: form.googleScholarUrl,
+        scopusUrl: form.scopusUrl,
+        scopusUrl2: form.scopusUrl2,
+        scopusUrl3: form.scopusUrl3,
+        wosUrl: form.wosUrl,
+      });
+
+      if (!urlResult.success) {
+        setError(urlResult.error || 'Failed to save profile URLs');
+        return;
       }
 
-      // App.tsx will redirect to dashboard via user state change
+      setShowSuccessModal(true);
     } catch (err: any) {
       setError(err.message || 'Failed to save profile');
     } finally {
@@ -197,29 +258,44 @@ export function ProfileSetup() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-teal-50 via-emerald-50 to-green-50">
-      {/* Header */}
+
+      {/* ── Profile Saved Success Modal ── */}
+      <Dialog open={showSuccessModal} onOpenChange={() => {}}>
+        <DialogContent className="max-w-md" onPointerDownOutside={(e) => e.preventDefault()}>
+          <div className="text-center py-6">
+            <CheckCircle className="w-16 h-16 text-green-600 mx-auto mb-4" />
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Profile Saved Successfully!</h3>
+            <p className="text-gray-600 mb-6">Your profile has been updated.</p>
+            <Button
+              onClick={() => { setShowSuccessModal(false); navigate('/dashboard'); }}
+              className="bg-teal-600 hover:bg-teal-700 text-white px-8"
+            >
+              Go to Dashboard
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <header style={{ backgroundColor: '#006B64', borderBottomLeftRadius: '24px', borderBottomRightRadius: '24px' }} className="shadow-md overflow-hidden">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-center h-16">
-          <div className="flex items-center gap-3">
-            <GitamLogo className="w-8 h-8" />
-            <h1 className="text-base font-semibold text-white">Complete Your Profile</h1>
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between items-center h-16">
+            <div className="flex items-center gap-3">
+              <GitamLogo className="w-8 h-8" />
+              <div>
+                <h1 className="text-base font-semibold text-white leading-tight">Edit Profile</h1>
+                <p className="text-xs" style={{ color: 'rgba(255,255,255,0.65)' }}>GITAM University Faculty Portal</p>
+              </div>
+            </div>
+            <button onClick={() => navigate('/dashboard')}
+              className="flex items-center gap-1.5 text-white/80 hover:text-white transition-colors text-sm">
+              <ArrowLeft className="w-4 h-4" />Back to Dashboard
+            </button>
           </div>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
 
-        {/* Welcome banner */}
-        <div className="text-center mb-2">
-          <h2 className="text-2xl font-semibold text-gray-900 mb-1">
-            Welcome to GITAM Research Portal, {user?.name?.split(' ')[0]}! 👋
-          </h2>
-          <p className="text-gray-500 text-sm">
-            Set up your profile so colleagues and admin can see your details. You can skip this and do it later from Settings.
-          </p>
-        </div>
-
-        {/* Profile Photo */}
+        {/* Profile Photo + Basic Info (read-only) */}
         <Card className="bg-white/95 shadow-lg border-0 rounded-xl">
           <CardHeader className="text-white rounded-t-xl" style={{ background: "linear-gradient(135deg, #006B64 0%, #005A54 100%)" }}>
             <CardTitle className="flex items-center space-x-2 text-white">
@@ -227,39 +303,49 @@ export function ProfileSetup() {
               <span>Profile Photo & Identity</span>
             </CardTitle>
           </CardHeader>
-          <CardContent className="p-6 flex items-center gap-6">
-            <div className="relative flex-shrink-0">
-              {form.profilePhoto ? (
-                <img src={form.profilePhoto} alt="Profile"
-                  className="w-20 h-20 rounded-full object-cover border-4 border-teal-100" />
-              ) : (
-                <InitialsAvatar name={user?.name} />
-              )}
-              <button onClick={() => fileInputRef.current?.click()}
-                className="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-teal-600 hover:bg-teal-700 flex items-center justify-center shadow-md">
-                <Camera className="w-3.5 h-3.5 text-white" />
-              </button>
-              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
-            </div>
-            <div>
-              <p className="font-semibold text-gray-900">{user?.name}</p>
-              <p className="text-sm text-gray-500">{user?.designation} · {user?.department}</p>
-              <p className="text-xs text-gray-400 mt-1">Click camera icon to upload (max 5MB)</p>
-              {photoError && <p className="text-xs text-red-500 mt-1">{photoError}</p>}
-              {form.profilePhoto && (
-                <button onClick={() => set('profilePhoto', '')}
-                  className="text-xs text-red-500 hover:text-red-700 mt-1 underline">Remove photo</button>
-              )}
+          <CardContent className="p-6">
+            <div className="flex items-center gap-6">
+              {/* Photo preview */}
+              <div className="relative flex-shrink-0">
+                {form.profilePhoto ? (
+                  <img src={form.profilePhoto} alt="Profile"
+                    className="w-24 h-24 rounded-full object-cover border-4 border-teal-100" />
+                ) : (
+                  <InitialsAvatar name={user?.name} size="lg" />
+                )}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="absolute w-8 h-8 rounded-full bg-teal-600 hover:bg-teal-700 flex items-center justify-center shadow-md transition-colors"
+                  style={{ bottom: '2px', right: '2px' }}
+                >
+                  <Camera className="w-4 h-4 text-white" />
+                </button>
+                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
+              </div>
+
+              <div className="flex-1">
+                <p className="text-lg font-semibold text-gray-900">{user?.name}</p>
+                <p className="text-sm text-gray-500">{user?.designation} · {user?.department}</p>
+                <p className="text-sm text-gray-400">Faculty ID: {user?.facultyId}</p>
+                <p className="text-xs text-gray-400 mt-1">Click the camera icon to upload a photo (max 5MB)</p>
+                {photoError && <p className="text-xs text-red-500 mt-1">{photoError}</p>}
+                {form.profilePhoto && (
+                  <button onClick={() => set('profilePhoto', '')}
+                    className="text-xs text-red-500 hover:text-red-700 mt-1 underline">
+                    Remove photo
+                  </button>
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* Personal & Academic */}
+        {/* Personal Info */}
         <Card className="bg-white/95 shadow-lg border-0 rounded-xl">
           <CardHeader>
             <CardTitle className="flex items-center space-x-2" style={{ color: "#006B64" }}>
-              <BookOpen className="w-5 h-5" />
-              <span>Personal & Academic Details</span>
+              <Phone className="w-5 h-5" />
+              <span>Personal Information</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -278,6 +364,30 @@ export function ProfileSetup() {
               <input type="number" className={inputClass} placeholder="e.g. 8" min="0" max="50"
                 value={form.yearsOfExperience} onChange={e => set('yearsOfExperience', e.target.value)} />
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Academic Info */}
+        <Card className="bg-white/95 shadow-lg border-0 rounded-xl">
+          <CardHeader>
+            <CardTitle className="flex items-center space-x-2" style={{ color: "#006B64" }}>
+              <BookOpen className="w-5 h-5" />
+              <span>Academic Information</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-6 space-y-5">
+            <TagInput
+              label="Research Areas"
+              items={researchList}
+              onChange={setResearchList}
+              placeholder="e.g. Software Engineering"
+            />
+            <TagInput
+              label="Courses Taught"
+              items={coursesList}
+              onChange={setCoursesList}
+              placeholder="e.g. Data Structures"
+            />
             <div>
               <label className={labelClass}>Office Hours</label>
               <div className="flex flex-wrap gap-2 items-center">
@@ -350,31 +460,21 @@ export function ProfileSetup() {
                 <p className="text-xs text-teal-600 mt-1">📅 {form.officeHours}</p>
               )}
             </div>
-            <div className="md:col-span-2">
-              <TagInput
-                label="Courses Taught"
-                items={coursesList}
-                onChange={setCoursesList}
-                placeholder="e.g. Data Structures"
-              />
-            </div>
-            <div className="md:col-span-2">
-              <TagInput
-                label="Roles & Responsibilities"
-                items={rolesList}
-                onChange={setRolesList}
-                placeholder="e.g. Class Coordinator - CSE 3rd Year"
-              />
-            </div>
+            <TagInput
+              label="Roles & Responsibilities"
+              items={rolesList}
+              onChange={setRolesList}
+              placeholder="e.g. Class Coordinator - CSE 3rd Year"
+            />
           </CardContent>
         </Card>
 
-        {/* Links */}
+        {/* Professional Links */}
         <Card className="bg-white/95 shadow-lg border-0 rounded-xl">
           <CardHeader>
             <CardTitle className="flex items-center space-x-2" style={{ color: "#006B64" }}>
               <Link className="w-5 h-5" />
-              <span>Professional Links <span className="text-sm font-normal text-gray-400">(optional)</span></span>
+              <span>Professional Links</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -389,50 +489,62 @@ export function ProfileSetup() {
                 value={form.websiteUrl} onChange={e => set('websiteUrl', e.target.value)} />
             </div>
             <div>
-              <label className={labelClass}><span className="inline-block w-2.5 h-2.5 rounded-full bg-orange-400 mr-1"></span>Google Scholar URL</label>
-              <input type="url" className={inputClass} placeholder="https://scholar.google.com/citations?user=..."
+              <label className={labelClass}>
+                <span className="inline-block w-3 h-3 rounded-full bg-orange-400 mr-1"></span>
+                Google Scholar URL
+              </label>
+              <input type="url" className={inputClass}
+                placeholder="https://scholar.google.com/citations?user=..."
                 value={form.googleScholarUrl} onChange={e => set('googleScholarUrl', e.target.value)} />
             </div>
             <div className="md:col-span-2">
-              <label className={labelClass}><span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-400 mr-1"></span>Scopus URL(s) <span className="text-gray-400 font-normal">(up to 3 if you have multiple IDs)</span></label>
+              <label className={labelClass}>
+                <span className="inline-block w-3 h-3 rounded-full bg-blue-400 mr-1"></span>
+                Scopus URL(s) <span className="text-gray-400 font-normal text-xs">(add up to 3 if you have multiple IDs)</span>
+              </label>
               <div className="flex flex-col gap-2">
-                <input type="url" className={inputClass} placeholder="https://www.scopus.com/authid/detail.uri?authorId=..."
+                <input type="url" className={inputClass}
+                  placeholder="https://www.scopus.com/authid/detail.uri?authorId=..."
                   value={form.scopusUrl} onChange={e => set('scopusUrl', e.target.value)} />
                 {(form.scopusUrl || form.scopusUrl2) && (
-                  <input type="url" className={inputClass} placeholder="Second Scopus URL (optional)"
+                  <input type="url" className={inputClass}
+                    placeholder="Second Scopus URL (optional)"
                     value={form.scopusUrl2} onChange={e => set('scopusUrl2', e.target.value)} />
                 )}
-                {(form.scopusUrl2 || form.scopusUrl3) && form.scopusUrl && (
-                  <input type="url" className={inputClass} placeholder="Third Scopus URL (optional)"
+                {form.scopusUrl && form.scopusUrl2 && (
+                  <input type="url" className={inputClass}
+                    placeholder="Third Scopus URL (optional)"
                     value={form.scopusUrl3} onChange={e => set('scopusUrl3', e.target.value)} />
                 )}
               </div>
             </div>
             <div className="md:col-span-2">
-              <label className={labelClass}><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-400 mr-1"></span>Web of Science URL</label>
-              <input type="url" className={inputClass} placeholder="https://www.webofscience.com/wos/author/record/..."
+              <label className={labelClass}>
+                <span className="inline-block w-3 h-3 rounded-full bg-green-400 mr-1"></span>
+                Web of Science URL
+              </label>
+              <input type="url" className={inputClass}
+                placeholder="https://www.webofscience.com/wos/author/record/..."
                 value={form.wosUrl} onChange={e => set('wosUrl', e.target.value)} />
             </div>
           </CardContent>
         </Card>
 
+        {/* Save Button */}
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">{error}</div>
         )}
 
-        {/* Action Buttons */}
-        <div className="flex justify-between items-center pb-8">
-          <Button variant="outline" onClick={handleSkip} disabled={skipping || saving}
-            className="border-gray-300 text-gray-500 hover:bg-gray-50">
-            {skipping ? 'Skipping...' : 'Skip for now'}
-            <ArrowRight className="w-4 h-4 ml-1" />
+        <div className="flex justify-end gap-3 pb-8">
+          <Button variant="outline" onClick={() => navigate('/dashboard')} className="border-gray-300 text-gray-600">
+            Cancel
           </Button>
-          <Button onClick={handleSave} disabled={saving || skipping}
-            className="text-white px-8" style={{ backgroundColor: "#006B64" }}>
+          <Button onClick={handleSave} disabled={saving}
+            className="text-white px-8" style={{ backgroundColor: '#006B64' }}>
             {saving ? (
-              <><CheckCircle className="w-4 h-4 mr-2 animate-pulse" />Saving...</>
+              <><Save className="w-4 h-4 mr-2 animate-pulse" />Saving...</>
             ) : (
-              <>Save & Go to Dashboard<ArrowRight className="w-4 h-4 ml-2" /></>
+              <><Save className="w-4 h-4 mr-2" />Save Profile</>
             )}
           </Button>
         </div>
